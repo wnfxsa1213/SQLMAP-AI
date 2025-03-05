@@ -25,6 +25,7 @@ def main():
     autoinject_parser.add_argument("--tables", help="指定要提取的表")
     autoinject_parser.add_argument("--verbose", action="store_true", help="详细输出")
     autoinject_parser.add_argument("--timeout", type=int, help="设置超时时间(秒)")
+    autoinject_parser.add_argument("--dbms", help="指定数据库类型(mysql, postgresql, oracle等)")
     
     # 解析参数
     args = parser.parse_args()
@@ -63,6 +64,8 @@ def main():
             options["verbose"] = True
         if args.timeout:
             options["timeout"] = args.timeout
+        if args.dbms:
+            options["dbms"] = args.dbms
             
         results = auto_inject(args.url, options)
         if not results['success']:

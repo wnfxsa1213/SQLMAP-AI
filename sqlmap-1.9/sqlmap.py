@@ -284,7 +284,7 @@ def start():
             from ai_module.explanations import suggest_fixes
             vuln_type = "SQL注入"  # 这里可以根据实际检测到的漏洞类型来设置
             dbms = conf.dbms or "MySQL"  # 使用检测到的数据库类型，默认为MySQL
-            code_sample = "SELECT * FROM users WHERE id = " + request.GET['id']  # 示例代码，实际应从请求中提取
+            code_sample = "SELECT * FROM users WHERE id = '1' OR '1'='1'"  # 使用模拟的示例代码
             fixes = suggest_fixes(vuln_type, dbms, code_sample)
             logger.info("修复建议:")
             logger.info(fixes)
