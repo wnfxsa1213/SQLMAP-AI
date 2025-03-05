@@ -10,6 +10,30 @@ ENV_KEY_NAME = 'SQLMAP_AI_KEY'
 KEYRING_SERVICE = 'sqlmap'
 KEYRING_USERNAME = 'ai_api_key'
 
+def get_config_path():
+    """
+    返回配置文件和密钥的存储位置信息
+    """
+    result = f"配置文件位置: {os.path.abspath(CONFIG_FILE)}\n"
+    
+    # 添加密钥存储位置信息
+    result += f"环境变量名称: {ENV_KEY_NAME}\n"
+    result += f"系统密钥环服务名: {KEYRING_SERVICE}\n"
+    result += f"系统密钥环用户名: {KEYRING_USERNAME}\n"
+    
+    # 检查当前使用的存储方式
+    if ENV_KEY_NAME in os.environ:
+        result += "当前API密钥存储方式: 环境变量\n"
+    elif keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME):
+        result += "当前API密钥存储方式: 系统密钥环\n"
+    elif os.path.exists(CONFIG_FILE):
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+        if 'API' in config and 'key' in config['API']:
+            result += "当前API密钥存储方式: 配置文件 (不安全)\n"
+    
+    return result
+
 def load_config():
     config = configparser.ConfigParser()
     

@@ -210,3 +210,27 @@ def analyze_scan_results(results):
     except Exception as e:
         logger.warning(f"AI分析失败: {e}")
         return fallback_analysis(results)
+
+def analyze_injection_results(injection_output, scan_info):
+    """
+    分析注入结果，提供详细的数据分析和建议
+    """
+    try:
+        dbms = scan_info.get('dbms', 'unknown')
+        prompt = f"""
+分析以下sqlmap自动注入的结果，并提供关于提取的数据的见解:
+
+数据库类型: {dbms}
+注入结果:
+{injection_output[:2000]}  # 限制长度
+
+请提供:
+1. 提取数据的摘要和重要发现
+2. 数据可能暴露的敏感信息
+3. 基于这些数据的后续攻击可能性
+4. 组织应该采取的防御措施
+"""
+        return call_ai_model(prompt)
+    except Exception as e:
+        logger.warning(f"分析注入结果失败: {e}")
+        return f"无法分析注入结果: {str(e)}"

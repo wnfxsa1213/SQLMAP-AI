@@ -9,6 +9,7 @@ SQLMap AI模块是对SQLMap工具的增强，通过集成大型语言模型(LLM)
 3. **漏洞解释**：详细说明发现的漏洞原理和潜在危害
 4. **修复建议**：提供针对性的安全修复方案
 5. **交互式CLI**：提供友好的命令行交互界面
+6. **自动注入**：AI扫描后自动执行注入攻击并分析结果
 
 ## 安装与配置
 
@@ -171,7 +172,25 @@ openai_auth_prefix = Bearer
    sqlmap-ai> fix "存储过程注入漏洞"
    ```
 
-5. **help命令**：获取帮助信息
+5. **autoinject命令**：自动扫描和注入
+   ```bash
+   # 基本语法
+   autoinject <目标URL> [选项]
+   
+   # 选项
+   --dump           提取数据
+   --tables <表名>  指定要提取的表
+   --verbose        详细输出
+   --timeout <秒>   设置超时时间
+   
+   # 示例
+   sqlmap-ai> autoinject http://example.com/vulnerable.php?id=1
+   sqlmap-ai> autoinject http://example.com/page.php?id=1 --dump
+   sqlmap-ai> autoinject http://example.com/api.php?id=1 --dump --tables users
+   sqlmap-ai> autoinject http://example.com/search.php?q=1 --verbose --timeout 60
+   ```
+
+6. **help命令**：获取帮助信息
    ```bash
    sqlmap-ai> help              # 显示所有命令
    sqlmap-ai> help payload      # 显示payload命令详细用法
@@ -208,6 +227,9 @@ openai_auth_prefix = Bearer
    
    # 定时任务
    python sqlmap.py -u "http://example.com" --smart-payload --ai-analysis --output-dir="daily_scan"
+   
+   # 自动注入
+   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dump
    ```
 
 4. **结果导出**
@@ -356,6 +378,25 @@ python sqlmap.py -m targets.txt --smart-payload --batch --threads=5
 python sqlmap.py -m targets.txt --ai-analysis --report-format=pdf --output-dir=scan_results
 ```
 
+### 案例5：自动注入测试
+
+完全自动化的SQL注入测试流程：
+
+```bash
+# 基本自动注入
+python -m ai_module autoinject "http://target.com/page.php?id=1"
+
+# 自动注入并提取数据
+python -m ai_module autoinject "http://target.com/page.php?id=1" --dump
+
+# 指定表并提取
+python -m ai_module autoinject "http://target.com/page.php?id=1" --dump --tables users,admin
+
+# 交互式方式
+python -m ai_module cli
+sqlmap-ai> autoinject http://target.com/page.php?id=1 --dump
+```
+
 ## 自定义与扩展
 
 ### 自定义提示词模板
@@ -426,6 +467,11 @@ language = zh_CN
 - 添加更多数据库类型支持
 - 改进WAF绕过能力
 - 增加批量扫描功能
+
+### v1.3.0
+- 添加AI扫描后自动注入功能
+- 增强注入结果分析能力
+- 优化交互式CLI界面
 
 ## 贡献与反馈
 
