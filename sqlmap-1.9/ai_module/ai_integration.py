@@ -44,16 +44,29 @@ def get_auth_header(config, api_key, model_type='openai'):
     else:
         raise ValueError(f"不支持的模型类型: {model_type}")
 
-def call_ai_model(prompt, model_override=None, max_retries=3, retry_delay=2):
-    config = load_config()
-    api_key = get_api_key()
+def call_ai_model(
+    prompt, 
+    model_override=None, 
+    api_key=None,       # 新增api_key参数
+    config=None,       # 新增config参数
+    max_retries=3, 
+    retry_delay=2
+):
+    # 如果未传入config则加载默认配置
+    config = config or load_config()  
+    # 如果未传入api_key则自动获取
+    api_key = api_key or get_api_key()  
     
     if not api_key:
         logger.error("API密钥未配置。请设置SQLMAP_AI_KEY环境变量或在配置文件中指定。")
         raise ValueError("API密钥未配置")
     
-    # 确定使用哪个模型
-    model_type = model_override or config['API'].get('default_model', 'openai')
+    # 修复点：确保model_type参数正确获取
+    model_type = (model_override or config['API'].get('default_model', 'openai')).lower()
+    
+    # 新增验证逻辑
+    if model_type not in ('openai', 'claude'):
+        raise ValueError(f"不支持的模型类型: {model_type}")
     
     # 获取代理设置
     proxies = get_proxy_settings(config)
@@ -67,9 +80,10 @@ def call_ai_model(prompt, model_override=None, max_retries=3, retry_delay=2):
             return cached_response
     
     retries = 0
+    max_retries = config['API'].getint('max_retries', 3)
     while retries < max_retries:
         try:
-            if model_type.lower() == 'openai':
+            if model_type == 'openai':
                 # 获取认证头
                 headers = get_auth_header(config, api_key, 'openai')
                 headers["Content-Type"] = "application/json"
@@ -114,7 +128,7 @@ def call_ai_model(prompt, model_override=None, max_retries=3, retry_delay=2):
                         error_msg += f", 响应内容: {response.text[:100]}"
                     raise Exception(error_msg)
             
-            elif model_type.lower() == 'claude':
+            elif model_type == 'claude':
                 # 获取认证头
                 headers = get_auth_header(config, api_key, 'claude')
                 

@@ -47,7 +47,8 @@ def load_config():
         'openai_api_type': 'proxy',
         'openai_auth_type': 'bearer',
         'openai_auth_header': 'Authorization',
-        'openai_auth_prefix': 'Bearer'
+        'openai_auth_prefix': 'Bearer',
+        'max_retries': '3'
     }
     
     config['CACHE'] = {
@@ -69,6 +70,11 @@ def load_config():
         except Exception as e:
             print(f"读取配置文件时出错: {e}")
             # 使用默认配置继续
+    
+    # 类型转换
+    config['API']['openai_timeout'] = str(int(config['API']['openai_timeout']))
+    config['API']['openai_max_tokens'] = str(int(config['API']['openai_max_tokens']))
+    config['API']['max_retries'] = str(int(config['API']['max_retries']))
     
     return config
 
@@ -105,13 +111,9 @@ def get_api_key():
         print(f"从系统密钥环获取API密钥失败: {e}")
     
     # 3. 检查配置文件
-    try:
-        config = load_config()
-        if 'key' in config['API']:
-            print("警告: API密钥存储在配置文件中不够安全，建议使用系统密钥环或环境变量。")
-            return config['API']['key']
-    except Exception as e:
-        print(f"从配置文件获取API密钥失败: {e}")
+    config = load_config()
+    if 'API' in config and 'key' in config['API']:
+        return config['API']['key']
     
     return None
 

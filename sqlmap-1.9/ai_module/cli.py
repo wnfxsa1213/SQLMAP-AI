@@ -35,7 +35,13 @@ class AICLI(cmd.Cmd):
         
         dbms, vuln_type = args[0], args[1]
         prompt = f"为{dbms}数据库生成一个{vuln_type}类型的SQL注入payload"
-        response = call_ai_model(prompt, self.api_key, self.config)
+        
+        response = call_ai_model(
+            prompt=prompt,
+            model_override=None,  # 使用默认模型
+            api_key=self.api_key,
+            config=self.config
+        )
         print(response)
 
     def do_analyze(self, arg):

