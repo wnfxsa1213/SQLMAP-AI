@@ -349,6 +349,30 @@ python -m ai_module autoinject "http://example.com/page.php?id=1" --batch
 python -m ai_module autoinject "http://example.com/page.php?id=1" --verbose
 ```
 
+**Q: 如何查看目标的数据库?**
+
+A: 使用 `--dbs` 参数列出所有可用的数据库:
+```bash
+python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql --dbs
+```
+这将显示目标系统上的所有可用数据库。
+
+**Q: 如何提取数据库内容?**
+
+A: 使用 `--dump` 参数自动提取数据库表内容:
+```bash
+python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql --dump
+```
+这将自动扫描数据库，提取表结构和表内容。
+
+**Q: 如何处理真实服务器不可用的情况?**
+
+A: 如果真实的目标服务器不可用或无法连接:
+1. 检查URL是否正确
+2. 确认目标服务器是否在线
+3. 检查网络连接是否正常
+4. 尝试使用本地测试环境
+
 **Q: 如何在没有网络的环境中使用？**
 
 A: AI模块默认需要网络连接以访问API服务，但您可以：

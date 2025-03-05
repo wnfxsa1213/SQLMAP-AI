@@ -22,6 +22,7 @@ def main():
     autoinject_parser = subparsers.add_parser("autoinject", help="自动扫描和注入")
     autoinject_parser.add_argument("url", help="目标URL")
     autoinject_parser.add_argument("--dump", action="store_true", help="提取数据")
+    autoinject_parser.add_argument("--dbs", action="store_true", help="列出所有数据库")
     autoinject_parser.add_argument("--tables", help="指定要提取的表")
     autoinject_parser.add_argument("--verbose", action="store_true", help="详细输出")
     autoinject_parser.add_argument("--timeout", type=int, help="设置超时时间(秒)")
@@ -58,6 +59,8 @@ def main():
         options = {}
         if args.dump:
             options["dump"] = True
+        if args.dbs:
+            options["dbs"] = True
         if args.tables:
             options["tables"] = args.tables
         if args.verbose:
