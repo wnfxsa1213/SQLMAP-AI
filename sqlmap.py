@@ -183,7 +183,7 @@ def main():
             
         if conf.smartPayload or conf.aiAnalysis or conf.explainVuln or conf.suggestFix:
             ai = AICore()
-            if not ai.check_api_key():
+            if not ai.is_api_key_valid():
                 logger.error("未找到有效的API密钥，请先配置API密钥")
                 return
 

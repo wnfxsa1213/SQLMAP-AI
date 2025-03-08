@@ -41,6 +41,14 @@ def main():
     analyze_parser.add_argument("--explain", action="store_true", help="解释漏洞")
     analyze_parser.add_argument("--suggest-fix", action="store_true", help="提供修复建议")
     
+    # 解释命令
+    explain_parser = subparsers.add_parser("explain", help="解释漏洞原理")
+    explain_parser.add_argument("vuln_type", help="漏洞类型")
+    
+    # 修复命令
+    fix_parser = subparsers.add_parser("fix", help="提供修复建议")
+    fix_parser.add_argument("vuln_description", help="漏洞描述")
+    
     args = parser.parse_args()
     
     # 处理命令
@@ -86,6 +94,24 @@ def main():
                 print(fixes)
         except Exception as e:
             print(f"分析失败: {e}")
+    elif args.command == "explain":
+        from ai_module.core import AICore
+        ai = AICore()
+        try:
+            explanation = ai.explain_vulnerability(args.vuln_type)
+            print("漏洞解释:")
+            print(explanation)
+        except Exception as e:
+            print(f"解释失败: {e}")
+    elif args.command == "fix":
+        from ai_module.core import AICore
+        ai = AICore()
+        try:
+            fix = ai.suggest_fix(args.vuln_description)
+            print("修复建议:")
+            print(fix)
+        except Exception as e:
+            print(f"生成修复建议失败: {e}")
     else:
         parser.print_help()
 
