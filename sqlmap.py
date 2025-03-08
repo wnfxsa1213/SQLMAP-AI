@@ -92,9 +92,9 @@ try:
     from lib.core.shell import clearHistory
     from lib.parse.cmdline import cmdLineParser
     from lib.utils.crawler import crawl
-    from ai_module.ai_integration import generate_smart_payload, analyze_scan_results
+    from lib.controller.controller import action
     from ai_module.cli import AICLI
-    from ai_module.explanations import explain_vulnerability, suggest_fixes
+    from ai_module.core import AICore
 except KeyboardInterrupt:
     errMsg = "user aborted"
 
@@ -182,7 +182,6 @@ def main():
             return
             
         if conf.smartPayload or conf.aiAnalysis or conf.explainVuln or conf.suggestFix:
-            from ai_module.core import AICore
             ai = AICore()
             if not ai.check_api_key():
                 logger.error("未找到有效的API密钥，请先配置API密钥")
@@ -257,39 +256,86 @@ def start():
     主要的扫描功能入口
     """
     if conf.smartPayload:
-        from ai_module.core import generate_smart_payload
-        payload = generate_smart_payload(conf.dbms, conf.technique)
-        logger.info(f"AI生成的智能payload: {payload}")
-        # 使用生成的payload进行测试
+        try:
+            ai = AICore()
+            payload = ai.generate_smart_payload(conf.dbms, conf.technique)
+            logger.info(f"AI生成的智能payload: {payload}")
+            # 使用生成的payload进行测试
+        except Exception as e:
+            logger.error(f"生成智能payload失败: {e}")
+            logger.info("继续使用标准的SQLMap扫描...")
 
-    # 执行扫描...
+    # 调用原始的SQLMap扫描函数
+    from lib.controller.controller import start as original_start
+    original_start()
 
     if conf.aiAnalysis:
-        from ai_module.core import analyze_scan_results
-        analysis = analyze_scan_results(kb.results)
-        logger.info("AI分析结果:")
-        logger.info(analysis)
-        
-        # 如果启用了漏洞解释功能
-        if conf.explainVuln:
-            from ai_module.explanations import explain_vulnerability
-            vuln_type = "SQL注入"  # 这里可以根据实际检测到的漏洞类型来设置
-            dbms = conf.dbms or "MySQL"  # 使用检测到的数据库类型，默认为MySQL
-            explanation = explain_vulnerability(vuln_type, dbms)
-            logger.info("漏洞解释:")
-            logger.info(explanation)
+        try:
+            ai = AICore()
             
-        # 如果启用了修复建议功能
-        if conf.suggestFix:
-            from ai_module.explanations import suggest_fixes
-            vuln_type = "SQL注入"  # 这里可以根据实际检测到的漏洞类型来设置
-            dbms = conf.dbms or "MySQL"  # 使用检测到的数据库类型，默认为MySQL
-            code_sample = "SELECT * FROM users WHERE id = '1' OR '1'='1'"  # 使用模拟的示例代码
-            fixes = suggest_fixes(vuln_type, dbms, code_sample)
-            logger.info("修复建议:")
-            logger.info(fixes)
+            # 构建扫描结果的摘要
+            scan_summary = ""
+            
+            # 检查是否有注入点
+            if kb.injections and len(kb.injections) > 0:
+                scan_summary += "SQLMap扫描发现以下注入点:\n"
+                for i, injection in enumerate(kb.injections):
+                    scan_summary += f"注入点 {i+1}:\n"
+                    scan_summary += f"  参数: {injection.parameter}\n"
+                    scan_summary += f"  位置: {injection.place}\n"
+                    scan_summary += f"  类型: {injection.data.get('type', '未知')}\n"
+                    scan_summary += f"  标题: {injection.data.get('title', '未知')}\n"
+                    scan_summary += f"  Payload: {injection.data.get('payload', '未知')}\n"
+                
+                # 添加数据库信息
+                if conf.dbms:
+                    scan_summary += f"数据库类型: {conf.dbms}\n"
+                
+                # 添加目标信息
+                scan_summary += f"目标URL: {conf.url}\n"
+            else:
+                scan_summary = "SQLMap扫描未发现任何SQL注入漏洞。"
+            
+            # 调用AI分析
+            analysis = ai.analyze_scan_results(scan_summary)
+            logger.info("AI分析结果:")
+            logger.info(analysis)
 
-    # 继续现有的代码...
+            # 如果启用了漏洞解释功能
+            if conf.explainVuln and kb.injections and len(kb.injections) > 0:
+                try:
+                    ai = AICore()
+                    # 使用实际检测到的数据库类型
+                    detected_dbms = conf.dbms or "MySQL"
+                    vuln_type = "SQL注入"
+                    explanation = ai.explain_vulnerability(vuln_type, detected_dbms)
+                    logger.info("漏洞解释:")
+                    logger.info(explanation)
+                except Exception as e:
+                    logger.error(f"解释漏洞失败: {e}")
+
+            # 如果启用了修复建议功能
+            if conf.suggestFix and kb.injections and len(kb.injections) > 0:
+                try:
+                    ai = AICore()
+                    # 使用实际检测到的数据库类型
+                    detected_dbms = conf.dbms or "MySQL"
+                    vuln_type = "SQL注入"
+                    
+                    # 使用实际的payload作为示例代码
+                    if kb.injections[0].data.get('payload'):
+                        code_sample = f"SELECT * FROM users WHERE id = {kb.injections[0].data.get('payload')}"
+                    else:
+                        code_sample = "SELECT * FROM users WHERE id = '1' OR '1'='1'"
+                        
+                    fixes = ai.suggest_fixes(vuln_type, detected_dbms, code_sample)
+                    logger.info("修复建议:")
+                    logger.info(fixes)
+                except Exception as e:
+                    logger.error(f"生成修复建议失败: {e}")
+        except Exception as e:
+            logger.error(f"AI分析失败: {e}")
+            logger.info("继续使用标准的SQLMap扫描结果...")
 
 if __name__ == "__main__":
     main()

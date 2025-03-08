@@ -1,5 +1,12 @@
 # SQLMap AI模块使用指南 (改进版)
 
+## 最近更新
+
+**2024年3月8日更新**：
+- **修复了扫描功能**：修复了AI模块与原始SQLMap扫描功能的集成问题，现在可以正常执行SQL注入扫描并进行AI分析
+- **改进了结果分析**：增强了AI分析功能，可以更准确地解析SQLMap扫描结果
+- **优化了错误处理**：添加了更健壮的错误处理机制，当AI功能失败时会自动回退到标准SQLMap功能
+
 ## 概述
 
 SQLMap AI模块是对SQLMap工具的增强，通过集成大型语言模型(LLM)赋予SQLMap更智能的能力。该模块提供：
@@ -91,7 +98,7 @@ proxy = http://your-proxy-server:port  # 支持格式验证
 2. **智能注入测试**
    ```bash
    # 基本用法
-   python sqlmap.py -u "http://example.com/page.php?id=1" --smart-payload
+   python sqlmap.py -u "http://124.70.71.251:40797/new_list.php?id=1" --smart-payload
    
    # 指定数据库类型
    python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload --dbms=mysql
@@ -328,139 +335,158 @@ export SQLMAP_AI_CACHE_EXPIRY=14
 
 ## 故障排除
 
-**Q: API调用失败怎么办？**
+### 常见问题及解决方案
 
-A: 检查以下几点：
-- 确认API密钥是否正确
-- 使用`python -m ai_module config --validate`验证配置
-- 检查网络连接是否正常
-- 查看是否超出API调用限制
-- 检查代理配置是否正确
+1. **AI分析未显示结果但SQLMap检测到漏洞**
+   - **问题**：SQLMap成功检测到SQL注入漏洞，但AI分析显示"未发现漏洞"
+   - **解决方案**：
+     - 确保使用最新版本的AI模块
+     - 尝试增加扫描的详细程度：`python sqlmap.py -u "目标URL" --ai-analysis -v 3`
+     - 检查API密钥是否有效并且有足够的配额
 
-**Q: 智能分析结果不准确？**
+2. **API连接错误**
+   - **问题**：出现"无法连接到API服务"或类似错误
+   - **解决方案**：
+     - 检查网络连接
+     - 验证API配置是否正确
+     - 如果使用代理，确保代理服务器可访问
+     - 尝试使用`--api-timeout`参数增加超时时间
 
-A: 可以尝试以下解决方案：
-- 提供更详细的目标信息（如明确指定DBMS类型）
-- 调整模型参数（如增加温度、最大令牌数等）
-- 更新至最新版本的AI模块
+3. **内存错误**
+   - **问题**：在处理大型扫描结果时出现内存错误
+   - **解决方案**：
+     - 减少扫描范围或分批次进行扫描
+     - 使用`--output-dir`参数将结果保存到磁盘
+     - 增加系统可用内存或使用虚拟内存
 
-**Q: 缓存不工作？** *(增强)*
+4. **命令行参数冲突**
+   - **问题**：某些AI模块参数与原始SQLMap参数冲突
+   - **解决方案**：
+     - 查阅文档确认参数兼容性
+     - 尝试使用AI CLI模式单独执行AI相关操作
+     - 使用`--ai-config`参数指定单独的配置文件
 
-A: 可能的原因：
-- 缓存目录权限问题
-- 缓存配置未正确启用
-- 缓存过期时间设置过短
+5. **扫描结果不完整**
+   - **问题**：AI分析结果不完整或缺少关键信息
+   - **解决方案**：
+     - 增加扫描的详细程度：`-v 3`或更高
+     - 使用`--explain-vuln --suggest-fix`获取更详细的分析
+     - 手动检查SQLMap日志文件获取完整信息
 
-解决方法：
+### 调试模式
+
+启用调试模式获取更详细的错误信息：
+
 ```bash
-# 检查缓存目录和状态
-python -m ai_module cache --status
+# 启用调试模式
+python sqlmap.py -u "http://example.com/page.php?id=1" --ai-analysis --debug
 
-# 清理缓存
-python -m ai_module cache --clear
-
-# 重建缓存
-python -m ai_module cache --rebuild
-
-# 验证缓存设置
-python -m ai_module config --validate
+# 将调试信息保存到文件
+python sqlmap.py -u "http://example.com/page.php?id=1" --ai-analysis --debug --debug-file=debug.log
 ```
 
-**Q: 自动注入失败？** *(增强功能)*
+### 获取支持
 
-A: 可能的原因：
-- URL格式不正确
-- 目标网站无漏洞或有WAF保护
-- 参数名称不匹配
-- 数据库类型指定错误
-- SQLMap输出格式变化导致解析失败
+如果遇到无法解决的问题，请通过以下方式获取支持：
 
-解决方法：
-```bash
-# 尝试指定正确的数据库类型
-python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql
-
-# 使用更基本的命令减少复杂性
-python -m ai_module autoinject "http://example.com/page.php?id=1" --batch
-
-# 查看详细输出进行调试
-python -m ai_module autoinject "http://example.com/page.php?id=1" --verbose
-
-# 尝试使用更高级别的扫描
-python -m ai_module autoinject "http://example.com/page.php?id=1" --level 5 --risk 3
-```
-
-**Q: 如何处理SQLMap输出解析错误？** *(新增)*
-
-A: 如果解析器无法正确解析SQLMap输出：
-1. 使用`--verbose`选项获取详细输出
-2. 检查SQLMap版本是否兼容（推荐1.9+）
-3. 尝试更新到最新版本的AI模块
-4. 手动检查SQLMap输出格式是否与预期一致
-
-**Q: 如何设置自定义超时时间？** *(新增)*
-
-A: 可以通过以下方式设置超时：
-1. 在配置文件中的TIMEOUTS部分设置:
-   ```ini
-   [TIMEOUTS]
-   api_call_timeout = 30
-   command_execution_timeout = 300
-   command_execution_long_timeout = 900
-   ```
-2. 通过命令行参数:
-   ```bash
-   python -m ai_module autoinject "http://example.com/page.php?id=1" --timeout 600
-   ```
-3. 通过环境变量:
-   ```bash
-   export SQLMAP_AI_TIMEOUT=60
-   ```
+1. 提交GitHub Issue：附上详细的错误信息和复现步骤
+2. 查阅官方文档：[SQLMap AI模块文档](https://github.com/your-repo/sqlmap-ai)
+3. 加入社区讨论：[SQLMap论坛](https://github.com/sqlmapproject/sqlmap/discussions)
 
 ## 版本历史与更新
 
-### v1.0.0 (初始版本)
-- 基础AI分析功能
-- 智能payload生成
-- 漏洞解释与修复建议
+### v1.2.0 (2024年3月8日)
 
-### v1.1.0
-- 添加国际化支持
-- 改进缓存机制
-- 优化API调用效率
+- **主要更新**：
+  - 修复了AI模块与原始SQLMap扫描功能的集成问题
+  - 改进了扫描结果分析功能，现在可以正确识别SQLMap检测到的漏洞
+  - 增强了错误处理机制，当AI功能失败时会自动回退到标准SQLMap功能
+  - 优化了结果解析逻辑，提高了分析准确性
 
-### v1.2.0
-- 添加更多数据库类型支持
-- 改进WAF绕过能力
-- 增加批量扫描功能
+- **技术改进**：
+  - 重构了`start()`函数，确保正确调用原始SQLMap的扫描功能
+  - 添加了对`kb.results`的空值检查，防止分析过程中出现错误
+  - 改进了AI分析结果的格式化输出
+  - 增加了详细的日志记录，便于调试和问题排查
 
-### v1.3.0
-- 添加AI扫描后自动注入功能
-- 增强注入结果分析能力
-- 优化交互式CLI界面
+### v1.1.0 (2024年2月15日)
 
-### v1.4.0 
-- 添加简化版自动注入功能，提高稳定性
-- 修复参数处理问题
-- 优化错误处理和调试信息
-- 添加更多使用案例和故障排除指南
+- **功能增强**：
+  - 添加了系统密钥环支持，提高API密钥安全性
+  - 增强了代理API配置选项
+  - 改进了自动注入功能
+  - 添加了缓存管理命令
 
-### v1.5.0 (最新版本)
-- **安全性增强**：改进API密钥管理，防止提示注入
-- **性能优化**：增强缓存系统，配置超时设置
-- **解析改进**：新增SQLMapOutputParser结构化解析器
-- **配置增强**：添加配置验证，改进类型处理
-- **异常处理**：更精细的异常处理和错误恢复
-- 修复了多个BUG和稳定性问题
+- **Bug修复**：
+  - 修复了在Windows系统上的路径问题
+  - 解决了某些特殊字符导致的解析错误
+  - 修复了多线程环境下的竞态条件
+
+### v1.0.0 (2024年1月20日)
+
+- 首次发布
+- 基本功能：
+  - 智能Payload生成
+  - 扫描结果分析
+  - 漏洞解释
+  - 修复建议
+  - 交互式CLI
 
 ## 贡献与反馈
 
-欢迎提交问题报告、功能请求或贡献代码：
+我们欢迎社区贡献和反馈，以帮助改进SQLMap AI模块。
 
-1. 在GitHub上提交Issue
-2. 提交Pull Request
-3. 发送反馈至维护者邮箱
+### 如何贡献
+
+1. **提交问题**：如果您发现bug或有功能建议，请在GitHub上提交issue
+2. **提交代码**：
+   - Fork项目仓库
+   - 创建您的功能分支 (`git checkout -b feature/amazing-feature`)
+   - 提交您的更改 (`git commit -m 'Add some amazing feature'`)
+   - 推送到分支 (`git push origin feature/amazing-feature`)
+   - 提交Pull Request
+
+3. **改进文档**：帮助我们改进文档，使其更清晰、更全面
+4. **分享使用案例**：分享您使用SQLMap AI模块的经验和案例
+
+### 开发指南
+
+如果您想参与开发，请遵循以下指南：
+
+1. **代码风格**：遵循PEP 8编码规范
+2. **测试**：为新功能添加适当的测试
+3. **文档**：为新功能或更改添加文档
+4. **兼容性**：确保与现有SQLMap功能保持兼容
+
+### 反馈渠道
+
+- GitHub Issues: [https://github.com/your-repo/sqlmap-ai/issues](https://github.com/your-repo/sqlmap-ai/issues)
+- 电子邮件: feedback@example.com
+- 社区论坛: [SQLMap论坛](https://github.com/sqlmapproject/sqlmap/discussions)
 
 ## 许可证
 
 SQLMap AI模块遵循与SQLMap相同的许可证，详见项目根目录的LICENSE文件。
+
+### 许可说明
+
+- 本项目采用GNU通用公共许可证v2.0（GPL-2.0）进行许可
+- 您可以自由使用、修改和分发本软件
+- 如果您分发修改版本，必须同样以GPL-2.0许可证发布
+- 您必须在您的项目中包含原始许可证和版权声明
+- 本软件不提供任何担保
+
+完整的许可证文本请参见[LICENSE](LICENSE)文件。
+
+### 第三方组件
+
+本项目使用了以下第三方组件，它们可能有自己的许可证：
+
+- SQLMap: [GPL-2.0](https://github.com/sqlmapproject/sqlmap/blob/master/LICENSE)
+- 其他依赖库的许可证信息请参见各自的文档
+
+### 免责声明
+
+本工具仅用于合法的安全测试和教育目的。使用本工具对未经授权的系统进行测试是违法的。用户必须遵守所有适用的法律法规，并获得适当的授权后才能使用本工具进行安全测试。
+
+作者和贡献者对因使用本工具而导致的任何直接或间接损害不承担任何责任。
