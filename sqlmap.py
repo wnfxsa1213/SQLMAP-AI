@@ -258,9 +258,47 @@ def start():
     if conf.smartPayload:
         try:
             ai = AICore()
-            payload = ai.generate_smart_payload(conf.dbms, conf.technique)
+            
+            # 获取数据库类型，如果未指定则使用通用payload
+            dbms = conf.dbms if conf.dbms else "generic"
+            
+            # 获取注入技术，如果未指定则使用union
+            technique = conf.technique if conf.technique else "union"
+            
+            # 生成智能payload
+            payload = ai.generate_smart_payload(dbms, technique)
             logger.info(f"AI生成的智能payload: {payload}")
+            
             # 使用生成的payload进行测试
+            if hasattr(conf, "data") and conf.data:
+                # 如果是POST请求，将payload添加到数据中
+                logger.info("将智能payload添加到POST数据中")
+                if "*" in conf.data:
+                    # 如果用户指定了注入点
+                    conf.data = conf.data.replace("*", payload)
+                else:
+                    # 否则尝试添加到第一个参数
+                    import re
+                    param_match = re.search(r'([^=&]+)=([^&]*)', conf.data)
+                    if param_match:
+                        param_name = param_match.group(1)
+                        conf.data = conf.data.replace(f"{param_name}={param_match.group(2)}", f"{param_name}={payload}")
+            elif hasattr(conf, "url") and conf.url:
+                # 如果是GET请求，将payload添加到URL中
+                logger.info("将智能payload添加到URL参数中")
+                if "*" in conf.url:
+                    # 如果用户指定了注入点
+                    conf.url = conf.url.replace("*", payload)
+                else:
+                    # 否则尝试添加到第一个参数
+                    import re
+                    param_match = re.search(r'([^=&]+)=([^&]*)', conf.url)
+                    if param_match:
+                        param_name = param_match.group(1)
+                        conf.url = conf.url.replace(f"{param_name}={param_match.group(2)}", f"{param_name}={payload}")
+            
+            logger.info(f"使用智能payload进行测试: {conf.url if hasattr(conf, 'url') else conf.data}")
+            
         except Exception as e:
             logger.error(f"生成智能payload失败: {e}")
             logger.info("继续使用标准的SQLMap扫描...")

