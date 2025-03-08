@@ -266,8 +266,16 @@ def start():
             logger.info("继续使用标准的SQLMap扫描...")
 
     # 调用原始的SQLMap扫描函数
-    from lib.controller.controller import start as original_start
-    original_start()
+    try:
+        from lib.controller.controller import start as original_start
+        original_start()
+    except ImportError as e:
+        logger.error(f"无法导入原始SQLMap扫描函数: {e}")
+        logger.error("请确保SQLMap库路径正确配置")
+        return
+    except Exception as e:
+        logger.error(f"执行SQLMap扫描时出错: {e}")
+        return
 
     if conf.aiAnalysis:
         try:
@@ -277,7 +285,7 @@ def start():
             scan_summary = ""
             
             # 检查是否有注入点
-            if kb.injections and len(kb.injections) > 0:
+            if hasattr(kb, 'injections') and kb.injections and len(kb.injections) > 0:
                 scan_summary += "SQLMap扫描发现以下注入点:\n"
                 for i, injection in enumerate(kb.injections):
                     scan_summary += f"注入点 {i+1}:\n"
@@ -288,54 +296,52 @@ def start():
                     scan_summary += f"  Payload: {injection.data.get('payload', '未知')}\n"
                 
                 # 添加数据库信息
-                if conf.dbms:
-                    scan_summary += f"数据库类型: {conf.dbms}\n"
+                if hasattr(kb, 'data') and kb.data:
+                    scan_summary += "\n数据库信息:\n"
+                    if 'dbms' in kb.data:
+                        scan_summary += f"  DBMS: {kb.data['dbms']}\n"
+                    if 'dbms_version' in kb.data:
+                        scan_summary += f"  版本: {kb.data['dbms_version']}\n"
                 
-                # 添加目标信息
-                scan_summary += f"目标URL: {conf.url}\n"
-            else:
-                scan_summary = "SQLMap扫描未发现任何SQL注入漏洞。"
-            
-            # 调用AI分析
-            analysis = ai.analyze_scan_results(scan_summary)
-            logger.info("AI分析结果:")
-            logger.info(analysis)
-
-            # 如果启用了漏洞解释功能
-            if conf.explainVuln and kb.injections and len(kb.injections) > 0:
+                # 添加表信息
+                if hasattr(kb, 'data') and kb.data and 'tables' in kb.data:
+                    scan_summary += "\n发现的表:\n"
+                    for db, tables in kb.data['tables'].items():
+                        scan_summary += f"  数据库 {db}: {', '.join(tables)}\n"
+                
+                # 生成AI分析
                 try:
-                    ai = AICore()
-                    # 使用实际检测到的数据库类型
-                    detected_dbms = conf.dbms or "MySQL"
-                    vuln_type = "SQL注入"
-                    explanation = ai.explain_vulnerability(vuln_type, detected_dbms)
-                    logger.info("漏洞解释:")
-                    logger.info(explanation)
-                except Exception as e:
-                    logger.error(f"解释漏洞失败: {e}")
-
-            # 如果启用了修复建议功能
-            if conf.suggestFix and kb.injections and len(kb.injections) > 0:
-                try:
-                    ai = AICore()
-                    # 使用实际检测到的数据库类型
-                    detected_dbms = conf.dbms or "MySQL"
-                    vuln_type = "SQL注入"
+                    analysis = ai.analyze_scan_results(scan_summary)
+                    logger.info("AI分析结果:")
+                    logger.info(analysis)
                     
-                    # 使用实际的payload作为示例代码
-                    if kb.injections[0].data.get('payload'):
-                        code_sample = f"SELECT * FROM users WHERE id = {kb.injections[0].data.get('payload')}"
-                    else:
-                        code_sample = "SELECT * FROM users WHERE id = '1' OR '1'='1'"
+                    # 如果需要解释漏洞
+                    if conf.explainVuln:
+                        # 获取漏洞类型
+                        vuln_type = "SQL注入"
+                        if kb.injections and len(kb.injections) > 0:
+                            vuln_type = kb.injections[0].data.get('title', 'SQL注入')
                         
-                    fixes = ai.suggest_fixes(vuln_type, detected_dbms, code_sample)
-                    logger.info("修复建议:")
-                    logger.info(fixes)
+                        explanation = ai.explain_vulnerability(vuln_type)
+                        logger.info("漏洞解释:")
+                        logger.info(explanation)
+                    
+                    # 如果需要提供修复建议
+                    if conf.suggestFix:
+                        # 构建漏洞描述
+                        vuln_description = "SQL注入漏洞"
+                        if kb.injections and len(kb.injections) > 0:
+                            vuln_description = f"{kb.injections[0].data.get('title', 'SQL注入')}漏洞，参数: {kb.injections[0].parameter}"
+                        
+                        fix = ai.suggest_fix(vuln_description)
+                        logger.info("修复建议:")
+                        logger.info(fix)
                 except Exception as e:
-                    logger.error(f"生成修复建议失败: {e}")
+                    logger.error(f"AI分析失败: {e}")
+            else:
+                logger.info("未发现SQL注入漏洞")
         except Exception as e:
-            logger.error(f"AI分析失败: {e}")
-            logger.info("继续使用标准的SQLMap扫描结果...")
+            logger.error(f"AI分析过程中出错: {e}")
 
 if __name__ == "__main__":
     main()

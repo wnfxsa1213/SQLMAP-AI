@@ -3,7 +3,7 @@
 ## 最近更新
 
 **2024年3月8日更新**：
-- **修复了扫描功能**：修复了AI模块与原始SQLMap扫描功能的集成问题，现在可以正常执行SQL注入扫描并进行AI分析
+- **简化功能**：移除了自动注入功能，专注于核心AI分析和智能payload生成
 - **改进了结果分析**：增强了AI分析功能，可以更准确地解析SQLMap扫描结果
 - **优化了错误处理**：添加了更健壮的错误处理机制，当AI功能失败时会自动回退到标准SQLMap功能
 
@@ -16,8 +16,6 @@ SQLMap AI模块是对SQLMap工具的增强，通过集成大型语言模型(LLM)
 3. **漏洞解释**：详细说明发现的漏洞原理和潜在危害
 4. **修复建议**：提供针对性的安全修复方案
 5. **交互式CLI**：提供友好的命令行交互界面
-6. **自动注入**：AI扫描后自动执行注入攻击并分析结果
-7. **结构化解析**：强大的SQLMap输出解析器，支持多种输出格式
 
 ## 安装与配置
 
@@ -98,7 +96,12 @@ proxy = http://your-proxy-server:port  # 支持格式验证
 2. **智能注入测试**
    ```bash
    # 基本用法
-   python sqlmap.py -u "http://124.70.71.251:40797/new_list.php?id=1" --smart-payload
+   python sqlmap.py -u "http://example.com/page.php?id=1" --smart-payload
+   
+   # 示例输出
+   [10:13:00] [INFO] AI生成的智能payload: "1' OR '1'='1"
+   [10:13:02] [INFO] 检测到MySQL数据库
+   [10:13:05] [INFO] 成功绕过WAF保护
    
    # 指定数据库类型
    python sqlmap.py -u "http://example.com/vuln.php?id=1" --smart-payload --dbms=mysql
@@ -128,19 +131,16 @@ proxy = http://your-proxy-server:port  # 支持格式验证
    python sqlmap.py -l burp.log --smart-payload --ai-analysis
    ```
 
-5. **增强版自动注入** *(改进功能)*
+5. **命令行工具**
    ```bash
-   # 基本用法
-   python -m ai_module autoinject "http://example.com/page.php?id=1"
+   # 生成payload
+   python -m ai_module payload mysql union --waf
    
-   # 指定数据库类型
-   python -m ai_module autoinject "http://example.com/page.php?id=1" --dbms mysql
+   # 分析扫描结果
+   python -m ai_module analyze "在id参数发现MySQL时间盲注，延迟5秒"
    
-   # 提取数据
-   python -m ai_module autoinject "http://example.com/page.php?id=1" --dump
-   
-   # 自定义超时时间
-   python -m ai_module autoinject "http://example.com/page.php?id=1" --timeout 600
+   # 从文件分析结果
+   python -m ai_module analyze scan_results.txt --file --explain --suggest-fix
    ```
 
 ### AI CLI模式详解
@@ -192,29 +192,7 @@ proxy = http://your-proxy-server:port  # 支持格式验证
    sqlmap-ai> fix "存储过程注入漏洞"
    ```
 
-5. **autoinject命令**：自动扫描和注入 *(增强功能)*
-   ```bash
-   # 基本语法
-   autoinject <目标URL> [选项]
-   
-   # 选项
-   --dbms <类型>     指定数据库类型（mysql, postgresql等）
-   --dump           提取数据
-   --tables <表名>   指定要提取的表
-   --verbose        详细输出
-   --timeout <秒>    设置超时时间
-   --level <级别>    设置扫描级别 (1-5)
-   --risk <风险>     设置风险级别 (1-3)
-   --threads <数量>  设置线程数
-   
-   # 示例
-   sqlmap-ai> autoinject http://example.com/vulnerable.php?id=1
-   sqlmap-ai> autoinject http://example.com/page.php?id=1 --dbms mysql --dump
-   sqlmap-ai> autoinject http://example.com/api.php?id=1 --dump --tables users
-   sqlmap-ai> autoinject http://example.com/search.php?q=1 --verbose --timeout 300
-   ```
-
-6. **help命令**：获取帮助信息
+5. **help命令**：获取帮助信息
    ```bash
    sqlmap-ai> help              # 显示所有命令
    sqlmap-ai> help payload      # 显示payload命令详细用法
@@ -244,19 +222,7 @@ proxy = http://your-proxy-server:port  # 支持格式验证
    python sqlmap.py -u "http://example.com" --proxy="http://127.0.0.1:8080" --smart-payload
    ```
 
-3. **自动化测试**
-   ```bash
-   # 批量目标扫描
-   python sqlmap.py -m targets.txt --smart-payload --ai-analysis --batch
-   
-   # 定时任务
-   python sqlmap.py -u "http://example.com" --smart-payload --ai-analysis --output-dir="daily_scan"
-   
-   # 增强版自动注入
-   python -m ai_module autoinject "http://example.com/vuln.php?id=1" --dbms mysql --dump
-   ```
-
-4. **结果导出**
+3. **结果导出**
    ```bash
    # 导出AI分析报告
    python sqlmap.py -u "http://example.com" --ai-analysis --report-format=pdf
@@ -302,11 +268,6 @@ export SQLMAP_AI_CACHE_EXPIRY=14
    - 自定义提示词模板
    - 配置代理服务器
 
-4. **自动注入优化** *(改进功能)*
-   - 使用增强版自动注入提高成功率
-   - 明确指定数据库类型加快扫描速度
-   - 使用结构化解析获取更准确的结果
-
 ## 新增功能与改进
 
 ### 1. 安全性增强
@@ -326,12 +287,6 @@ export SQLMAP_AI_CACHE_EXPIRY=14
 - **多格式支持**：支持解析不同版本和格式的SQLMap输出
 - **数据提取**：能够从扫描结果中提取数据库、表和数据记录信息
 - **鲁棒性增强**：针对不同输出格式的适应性和错误恢复能力增强
-
-### 4. 超时与配置管理
-- **操作类型超时**：不同操作类型（短扫描、数据提取等）使用不同超时设置
-- **配置验证**：新增配置验证功能，检查并报告配置问题
-- **类型转换与验证**：自动处理配置项类型转换和验证
-- **默认值备份**：配置加载失败时自动回退到默认配置
 
 ## 故障排除
 
@@ -398,7 +353,7 @@ python sqlmap.py -u "http://example.com/page.php?id=1" --ai-analysis --debug --d
 ### v1.2.0 (2024年3月8日)
 
 - **主要更新**：
-  - 修复了AI模块与原始SQLMap扫描功能的集成问题
+  - 简化功能：移除了自动注入功能，专注于核心AI分析和智能payload生成
   - 改进了扫描结果分析功能，现在可以正确识别SQLMap检测到的漏洞
   - 增强了错误处理机制，当AI功能失败时会自动回退到标准SQLMap功能
   - 优化了结果解析逻辑，提高了分析准确性
@@ -408,13 +363,13 @@ python sqlmap.py -u "http://example.com/page.php?id=1" --ai-analysis --debug --d
   - 添加了对`kb.results`的空值检查，防止分析过程中出现错误
   - 改进了AI分析结果的格式化输出
   - 增加了详细的日志记录，便于调试和问题排查
+  - 简化了模块结构，移除了不必要的复杂性
 
 ### v1.1.0 (2024年2月15日)
 
 - **功能增强**：
   - 添加了系统密钥环支持，提高API密钥安全性
   - 增强了代理API配置选项
-  - 改进了自动注入功能
   - 添加了缓存管理命令
 
 - **Bug修复**：

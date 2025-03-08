@@ -353,9 +353,30 @@ def auto_inject(url, options=None):
     logger.info(_("开始扫描目标URL以寻找SQL注入漏洞: {}").format(url))
     print(_("[*] 开始扫描目标URL以寻找SQL注入漏洞..."))
     
+    # 检查sqlmap.py文件是否存在
+    sqlmap_path = "sqlmap.py"
+    if not os.path.exists(sqlmap_path):
+        # 尝试在当前目录和父目录查找sqlmap.py
+        possible_paths = [
+            os.path.join(".", "sqlmap.py"),
+            os.path.join("..", "sqlmap.py"),
+            os.path.join("sqlmap-1.9", "sqlmap.py")
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                sqlmap_path = path
+                break
+        else:
+            error_msg = "无法找到sqlmap.py文件，请确保SQLMap已正确安装"
+            logger.error(error_msg)
+            print(f"[-] {error_msg}")
+            results['error'] = error_msg
+            return results
+    
     # 构建扫描命令
     scan_cmd = [
-        "python", "sqlmap.py", 
+        "python", sqlmap_path, 
         "-u", url, 
         "--batch",
         "--level", str(options.get("level", 3)),
@@ -409,8 +430,97 @@ def auto_inject(url, options=None):
                 logger.info(_("发现 {} 个SQL注入点").format(len(scan_info['injection_points'])))
                 print(_("[+] 发现 {} 个SQL注入点").format(len(scan_info['injection_points'])))
                 
+                # 尝试使用SQLMap API方式执行注入
+                try:
+                    # 检查是否可以导入SQLMap API
+                    try:
+                        import sys
+                        # 添加SQLMap目录到Python路径
+                        sqlmap_dir = os.path.dirname(os.path.abspath(sqlmap_path))
+                        if sqlmap_dir not in sys.path:
+                            sys.path.insert(0, sqlmap_dir)
+                        
+                        # 尝试导入SQLMap模块
+                        from lib.core.data import kb, conf
+                        from lib.core.common import setPaths
+                        from lib.core.common import setTechniques
+                        from lib.core.common import checkDependencies
+                        from lib.core.common import parseTargetUrl
+                        from lib.controller.controller import start
+                        
+                        # 设置SQLMap路径
+                        setPaths(sqlmap_dir)
+                        
+                        # 检查依赖
+                        checkDependencies()
+                        
+                        # 设置目标URL
+                        conf.url = url
+                        
+                        # 解析目标URL
+                        parseTargetUrl()
+                        
+                        # 设置批处理模式
+                        conf.batch = True
+                        
+                        # 设置扫描级别和风险
+                        conf.level = options.get("level", 3)
+                        conf.risk = options.get("risk", 2)
+                        
+                        # 设置技术
+                        setTechniques(options.get("technique", "BEUSTQ"))
+                        
+                        # 设置线程数
+                        conf.threads = options.get("threads", 3)
+                        
+                        # 设置数据库类型
+                        if "dbms" in options:
+                            conf.dbms = options["dbms"]
+                        
+                        # 设置详细模式
+                        if options.get("verbose", False):
+                            conf.verbose = 1
+                        
+                        # 设置智能模式
+                        if options.get("smart", True):
+                            conf.smart = True
+                        
+                        # 设置其他选项
+                        if options.get("dbs", False):
+                            conf.dbs = True
+                        elif options.get("dump", False):
+                            conf.dump = True
+                        
+                        if "tables" in options:
+                            conf.tbl = options["tables"]
+                        
+                        # 开始注入
+                        print(_("[*] 使用SQLMap API直接执行注入..."))
+                        start()
+                        
+                        # 检查结果
+                        if hasattr(kb, 'data') and kb.data:
+                            print(_("[+] 注入成功"))
+                            results['success'] = True
+                            results['injection_output'] = str(kb.data)
+                            return results
+                        else:
+                            print(_("[-] 注入未返回数据"))
+                    except ImportError as e:
+                        print(_("[-] 无法导入SQLMap API: {}").format(str(e)))
+                        logger.error(f"无法导入SQLMap API: {e}")
+                except Exception as e:
+                    print(_("[-] 使用SQLMap API执行注入时出错: {}").format(str(e)))
+                    logger.error(f"使用SQLMap API执行注入时出错: {e}")
+                
+                # 如果API方式失败，回退到命令行方式
+                print(_("[*] 尝试使用命令行方式执行注入..."))
+                
                 # 生成注入命令
                 inject_cmd = generate_inject_command(url, scan_info, options)
+                
+                # 确保使用相同的sqlmap路径
+                inject_cmd[1] = sqlmap_path
                 
                 # 根据用户选项添加额外参数
                 if options.get("dbs", False):
@@ -420,6 +530,10 @@ def auto_inject(url, options=None):
                 
                 if "tables" in options:
                     inject_cmd.extend(["--tables", options["tables"]])
+                
+                # 添加--batch参数确保无交互
+                if "--batch" not in inject_cmd:
+                    inject_cmd.append("--batch")
                 
                 # 提示注入命令
                 inject_cmd_str = " ".join(inject_cmd)
@@ -457,11 +571,11 @@ def auto_inject(url, options=None):
                         summary.append(_("获取到 {} 个数据库").format(len(inject_info['databases'])))
                         
                     if 'tables' in inject_info and inject_info['tables']:
-                        total_tables = sum(item['table_count'] for item in inject_info['tables'])
+                        total_tables = sum(len(item.get('tables', [])) for item in inject_info['tables'])
                         summary.append(_("发现 {} 个数据表").format(total_tables))
                         
                     if 'data' in inject_info and inject_info['data']:
-                        total_entries = sum(item['entries'] for item in inject_info['data'])
+                        total_entries = sum(item.get('entries', 0) for item in inject_info['data'])
                         summary.append(_("提取了 {} 条数据记录").format(total_entries))
                         
                     if summary:
@@ -483,6 +597,50 @@ def auto_inject(url, options=None):
                     print(_("[-] 注入执行失败，返回码: {}").format(inject_process.returncode))
                     if inject_error:
                         print(_("错误信息: {}").format(inject_error[:200]))
+                    
+                    # 尝试使用替代命令
+                    print(_("[*] 尝试使用替代方法执行注入..."))
+                    
+                    # 使用更简单的命令
+                    simple_cmd = [
+                        "python", sqlmap_path,
+                        "-u", url,
+                        "--batch",
+                        "--dbms", scan_info.get('dbms', 'mysql'),
+                        "--level", str(options.get("level", 3)),
+                        "--risk", str(options.get("risk", 2))
+                    ]
+                    
+                    if options.get("verbose", False):
+                        simple_cmd.append("-v")
+                    
+                    # 提示替代命令
+                    simple_cmd_str = " ".join(simple_cmd)
+                    logger.info(_("执行替代命令: {}").format(simple_cmd_str))
+                    print(_("[*] 执行替代命令: {}").format(simple_cmd_str))
+                    
+                    try:
+                        alt_process = subprocess.Popen(
+                            simple_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            bufsize=1
+                        )
+                        alt_output, alt_error = alt_process.communicate(timeout=command_timeout)
+                        
+                        if alt_process.returncode == 0:
+                            print(_("[+] 替代方法执行成功"))
+                            results['success'] = True
+                            results['injection_output'] = alt_output
+                            if alt_error:
+                                results['injection_error'] = alt_error
+                        else:
+                            print(_("[-] 替代方法也失败，返回码: {}").format(alt_process.returncode))
+                            if alt_error:
+                                print(_("错误信息: {}").format(alt_error[:200]))
+                    except Exception as e:
+                        print(_("[-] 替代方法执行出错: {}").format(str(e)))
             else:
                 logger.info(_("未发现SQL注入点"))
                 print(_("[-] 未发现SQL注入点"))
@@ -498,7 +656,8 @@ def auto_inject(url, options=None):
             return results
             
     except Exception as e:
-        logger.error(f"自动注入过程中发生错误: {e}")
-        print(_("[-] 自动注入过程中发生错误: {}").format(str(e)))
-        results['error'] = str(e)
+        error_msg = f"执行过程中出错: {str(e)}"
+        logger.error(error_msg)
+        print(f"[-] {error_msg}")
+        results['error'] = error_msg
         return results
